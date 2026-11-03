@@ -268,6 +268,11 @@ def scroll(x, y, dy=-300, dx=0):
 
 
 def capture_screenshot(path=None, full=False, max_dim=None):
+    if path:
+        # A missing directory was the most common screenshot failure (36 times
+        # in 10 sessions, October 2026): agents save straight into a new
+        # acceptance folder.
+        os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
     if not _CURSOR_ON:
         return _capture_screenshot(path, full=full, max_dim=max_dim)
     _set_cursor_hidden(True)
@@ -277,7 +282,24 @@ def capture_screenshot(path=None, full=False, max_dim=None):
         _set_cursor_hidden(False)
 
 
-for _f, _orig in ((click_at_xy, _click_at_xy), (scroll, _scroll), (capture_screenshot, _capture_screenshot)):
+_js = _bh.js
+
+
+def js(expression, target_id=None):
+    try:
+        return _js(expression, target_id=target_id)
+    except RuntimeError as e:
+        # Every call evaluates in the page's global scope, so a top-level
+        # const/let from an earlier call makes the same name fail the next
+        # time (129 failures in 8 sessions). A block gives it its own scope
+        # and keeps the last statement's value as the result. Retrying is safe:
+        # the redeclaration is rejected before any of the script runs.
+        if "has already been declared" not in str(e):
+            raise
+        return _js("{\n" + expression + "\n}", target_id=target_id)
+
+
+for _f, _orig in ((click_at_xy, _click_at_xy), (scroll, _scroll), (capture_screenshot, _capture_screenshot), (js, _js)):
     _f.__doc__ = _orig.__doc__
 del _f, _orig
 
@@ -288,7 +310,8 @@ def mark_tab(status, target=None):
     """Mark a tab as held for the user, so close_session() and bh-reap leave it open.
 
     status: "deliverable" (a result the user should look at),
-            "handoff" (the user has to act here, e.g. log in or approve),
+            "handoff" (the user has to act here, e.g. log in or approve; the
+            tab is brought to the front, since the user has to go there anyway),
             None (clear). target: a target id or tab dict; default the current tab.
     Returns False if the session-groups extension is not loaded.
     """
@@ -309,6 +332,10 @@ def mark_tab(status, target=None):
             _bh._send({"meta": "release_target", "target_id": target_id})
         except Exception:
             pass
+    if ok and status == "handoff":
+        # Agents called activate_tab() themselves for exactly this in 14 of 95
+        # sessions, against the rule that nothing takes the screen.
+        _bh.activate_tab(target_id)
     return ok
 
 

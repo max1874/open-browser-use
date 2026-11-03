@@ -67,6 +67,7 @@ unset _AH
 # so the call it rides on never waits for it.
 _REAP_STAMP="${XDG_CONFIG_HOME:-$HOME/.config}/browser-harness/runtime/.bh-reap"
 if [ -z "$(find "$_REAP_STAMP" -mmin -10 2>/dev/null)" ]; then
+  mkdir -p "${_REAP_STAMP%/*}" "${_REAP_STAMP%/*}/../tmp"  # absent until the first daemon starts
   touch "$_REAP_STAMP"
   ("$(dirname "$(realpath "$0")")/bh-reap" >"${_REAP_STAMP%/*}/../tmp/bh-reap.log" 2>&1 &)
 fi
