@@ -1,0 +1,26 @@
+{
+  "manifest_version": 3,
+  "name": "open-browser-use session groups",
+  "version": "1.0",
+  "description": "Groups each agent session's tabs and shows the agent's pointer on the tab it drives.",
+  "permissions": [
+    "tabs",
+    "tabGroups",
+    "debugger",
+    "storage"
+  ],
+  "background": {
+    "service_worker": "bh_session_groups_sw.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "bh_active_tab.js"
+      ],
+      "run_at": "document_start"
+    }
+  ]
+}

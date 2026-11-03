@@ -1,0 +1,171 @@
+#!/bin/sh
+# bh-agent-chrome — ensure the agent-dedicated Chrome instance is running.
+# Installed as a symlink by ../install.sh. BH_AGENT_CHROME_APP names another
+# Chromium-family app; only Google Chrome has been tested.
+#
+# One long-lived Chrome on its own persistent profile, listening on a fixed CDP
+# port. All agent sessions share it, so logins persist across sessions and the
+# user's everyday Chrome is never touched.
+#
+# Launched with `open -g` (do not bring the app to the foreground) so starting
+# it never steals focus from whatever the user is doing.
+#
+# A non-default user-data-dir also sidesteps Chrome 144's per-connection
+# "Allow remote debugging?" sheet (see daemon.py:216-219).
+#
+# Each cold start loads the session-groups extension (one tab group per agent
+# session, driven by agent_helpers.py). Chrome keeps a CDP-loaded extension
+# only while launched with --enable-unsafe-extension-debugging and drops it
+# from the profile on the next launch, so it is reloaded every time. The flag
+# adds no reach: whoever can talk CDP on this port already controls the browser.
+
+PORT="${BH_AGENT_CHROME_PORT:-9333}"
+PROFILE="${BH_AGENT_CHROME_PROFILE:-$HOME/.local/share/agent-chrome}"
+ENDPOINT="http://127.0.0.1:$PORT/json/version"
+GROUPS_EXT="${BH_SESSION_GROUPS_EXT:-$(dirname "$(dirname "$(realpath "$0")")")/extension}"
+BH_PY="$HOME/.local/share/uv/tools/browser-harness/bin/python3"
+
+# One launcher at a time: a supervisor that relaunches Chrome as soon as it
+# exits would otherwise race a --restart into two cold starts.
+if [ -z "${BH_AGENT_CHROME_LOCKED:-}" ]; then
+  mkdir -p "$PROFILE"
+  export BH_AGENT_CHROME_LOCKED=1
+  exec lockf -k "$PROFILE/.bh-launch.lock" "$0" "$@"
+fi
+
+alive() { curl -sf -m 1 "$ENDPOINT" >/dev/null 2>&1; }
+
+# Load the session-groups extension unless Chrome already has it. Ask Chrome
+# every time rather than trusting a record of having loaded it: 2026-10-12 a
+# Chrome came up without it, and 2026-10-31 a running Chrome dropped it hours
+# after loading it (process unchanged, gone from chrome://extensions), and every
+# later tab went ungrouped until someone noticed. Loading again while it is loaded
+# would reload it and strand the content scripts in open tabs, hence the check.
+ensure_session_groups() {
+  [ -d "$GROUPS_EXT" ] && [ -x "$BH_PY" ] || return 0
+  "$BH_PY" -I - "$ENDPOINT" "$GROUPS_EXT" <<'PY' ||
+import asyncio, json, sys, urllib.request, websockets
+
+async def main(endpoint, path):
+    ws_url = json.load(urllib.request.urlopen(endpoint))["webSocketDebuggerUrl"]
+    async with websockets.connect(ws_url, max_size=None) as ws:
+        async def call(i, method, **params):
+            await ws.send(json.dumps({"id": i, "method": method, "params": params}))
+            while True:
+                m = json.loads(await asyncio.wait_for(ws.recv(), 10))
+                if m.get("id") == i:
+                    if "error" in m:
+                        sys.exit(m["error"].get("message"))
+                    return m["result"]
+        loaded = (await call(1, "Extensions.getExtensions"))["extensions"]
+        if not any(e["path"] == path and e["enabled"] for e in loaded):
+            await call(2, "Extensions.loadUnpacked", path=path)
+
+asyncio.run(main(*sys.argv[1:]))
+PY
+    { echo "bh-agent-chrome: session-groups extension not loaded; tabs stay ungrouped" >&2; return 1; }
+}
+
+# --restart [--force]: quit and relaunch the agent Chrome, e.g. to pick up
+# extension edits. Every agent session shares this browser, so closing it
+# closes their tabs mid-task (2026-10-10 a restart closed another session's
+# login page the user was about to use). Refuse while another session's
+# daemon is alive; --force is for when the user has said it is fine.
+if [ "${1:-}" = "--restart" ]; then
+  self=""
+  if [ -n "${CLAUDE_CODE_SESSION_ID:-}" ]; then self="cc-${CLAUDE_CODE_SESSION_ID%%-*}"
+  elif [ -n "${CODEX_THREAD_ID:-}" ]; then self="cx-${CODEX_THREAD_ID%%-*}"; fi
+  self="${BU_NAME:-$self}"
+  others=""
+  for f in "${XDG_CONFIG_HOME:-$HOME/.config}"/browser-harness/runtime/bu-*.pid; do
+    [ -e "$f" ] || continue
+    name=$(basename "$f" .pid); name=${name#bu-}
+    [ "$name" = "$self" ] && continue
+    pid=$(cat "$f" 2>/dev/null)
+    [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null && others="$others $name"
+  done
+  if [ -n "$others" ] && [ "${2:-}" != "--force" ]; then
+    echo "bh-agent-chrome: not restarting — other sessions have live daemons:$others" >&2
+    echo "  Closing Chrome would close their tabs. Ask the user, then use --restart --force." >&2
+    exit 2
+  fi
+  if alive; then
+    "$BH_PY" -I - "$ENDPOINT" <<'PY'
+import asyncio, json, sys, urllib.request, websockets
+
+async def main(endpoint):
+    ws_url = json.load(urllib.request.urlopen(endpoint))["webSocketDebuggerUrl"]
+    async with websockets.connect(ws_url) as ws:
+        await ws.send(json.dumps({"id": 1, "method": "Browser.close"}))
+        try:
+            await asyncio.wait_for(ws.recv(), 5)
+        except Exception:
+            pass
+
+asyncio.run(main(sys.argv[1]))
+PY
+    i=0
+    while pgrep -f "user-data-dir=$PROFILE" >/dev/null && [ "$i" -lt 40 ]; do sleep 0.5; i=$((i + 1)); done
+  fi
+fi
+
+alive && { ensure_session_groups; exit 0; }
+
+# Which profile inside the user-data-dir: the one last used, so a profile the
+# user switched to (2026-10-11: Default deleted, signed in as Profile 2) keeps
+# working. Naming it on the command line also skips the profile picker Chrome
+# shows at launch once there are several profiles.
+mkdir -p "$PROFILE"
+PROFILE_DIR="${BH_AGENT_CHROME_PROFILE_DIR:-$(python3 -I - "$PROFILE/Local State" <<'PY' 2>/dev/null
+import json, sys
+print(json.load(open(sys.argv[1]))["profile"]["last_used"])
+PY
+)}"
+PROFILE_DIR="${PROFILE_DIR:-Default}"
+
+# Profile prefs: vertical tabs, saved-groups bar hidden. Chrome rewrites
+# Preferences on exit, so they can only be set while it is down — i.e. here,
+# before every cold start, for whichever profile is about to open.
+mkdir -p "$PROFILE/$PROFILE_DIR"
+python3 -I - "$PROFILE/$PROFILE_DIR/Preferences" <<'PY' || echo "bh-agent-chrome: could not set profile prefs" >&2
+import json, os, sys
+
+path = sys.argv[1]
+WANT = {
+    ("vertical_tabs", "enabled"): True,
+    ("bookmark_bar", "show_tab_groups"): False,
+}
+prefs = json.load(open(path)) if os.path.exists(path) else {}
+changed = False
+for keys, value in WANT.items():
+    node = prefs
+    for k in keys[:-1]:
+        node = node.setdefault(k, {})
+    if node.get(keys[-1]) != value:
+        node[keys[-1]] = value
+        changed = True
+if changed:
+    json.dump(prefs, open(path, "w"), separators=(",", ":"))
+PY
+
+open -g -n -a "${BH_AGENT_CHROME_APP:-Google Chrome}" --args \
+  --user-data-dir="$PROFILE" \
+  --profile-directory="$PROFILE_DIR" \
+  --remote-debugging-port="$PORT" \
+  --no-first-run \
+  --no-default-browser-check \
+  --disable-features=ChromeWhatsNewUI \
+  --enable-unsafe-extension-debugging
+
+i=0
+while [ "$i" -lt 60 ]; do
+  if alive; then
+    ensure_session_groups
+    exit 0
+  fi
+  sleep 0.5
+  i=$((i + 1))
+done
+
+echo "bh-agent-chrome: no CDP endpoint on port $PORT after 30s (profile: $PROFILE)" >&2
+exit 1

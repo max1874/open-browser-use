@@ -1,0 +1,75 @@
+#!/bin/sh
+# browser-harness — agent-session shim. Installed as a symlink by ../install.sh.
+#
+# 1) BU_NAME: one daemon + one dedicated tab per agent session, so sessions do
+#    not clobber each other's page state (see daemon.py:374-378).
+# 2) BU_CDP_URL: point every session at the agent-dedicated Chrome instead of
+#    the user's everyday Chrome, so agent work never touches their browser and
+#    never steals macOS focus.
+#
+# NOTE: `uv tool install/upgrade browser-harness` replaces ~/.local/bin/browser-harness
+# with uv's own symlink. Re-run ../install.sh to restore this shim.
+
+REAL="$HOME/.local/share/uv/tools/browser-harness/bin/browser-harness"
+AGENT_CHROME="$(dirname "$(realpath "$0")")/bh-agent-chrome"
+AGENT_CDP_URL="http://127.0.0.1:${BH_AGENT_CHROME_PORT:-9333}"
+
+# --- 1. per-session daemon name -------------------------------------------
+if [ -z "${BU_NAME:-}" ]; then
+  if [ -n "${CLAUDE_CODE_SESSION_ID:-}" ]; then
+    _pfx=cc; _sid="$CLAUDE_CODE_SESSION_ID"
+  elif [ -n "${CODEX_THREAD_ID:-}" ]; then
+    _pfx=cx; _sid="$CODEX_THREAD_ID"
+  fi
+  if [ -n "${_sid:-}" ]; then
+    # First segment only, then strip anything outside _ipc.py:37's [A-Za-z0-9_-].
+    _sid=$(printf '%s' "${_sid%%-*}" | tr -cd 'A-Za-z0-9_-' | cut -c1-32)
+    [ -n "$_sid" ] && { BU_NAME="$_pfx-$_sid"; export BU_NAME; }
+  fi
+  unset _pfx _sid
+fi
+
+# --- 2. agent-dedicated Chrome --------------------------------------------
+# Skipped for subcommands that never touch a browser, and when the caller has
+# already pinned an endpoint (BU_CDP_URL / BU_CDP_WS) or a cloud browser.
+case "${1:-}" in
+  skill|telemetry|recordings|auth|mac-approve) _skip_chrome=1 ;;
+  *) _skip_chrome= ;;
+esac
+if [ -z "$_skip_chrome" ] &&
+   [ -z "${BU_CDP_URL:-}" ] && [ -z "${BU_CDP_WS:-}" ] && [ -z "${BU_BROWSER_ID:-}" ] &&
+   [ -z "${BH_USE_DEFAULT_CHROME:-}" ]; then
+  if "$AGENT_CHROME"; then
+    BU_CDP_URL="$AGENT_CDP_URL"
+    export BU_CDP_URL
+  else
+    echo "browser-harness: agent Chrome unavailable; set BH_USE_DEFAULT_CHROME=1 to fall back to the everyday Chrome." >&2
+    exit 1
+  fi
+fi
+unset _skip_chrome
+
+# --- 3. focus-patch guard --------------------------------------------------
+# agent_helpers.py is a symlink into this repo. helpers._load_agent_helpers()
+# does `if not p.exists(): return` — a dangling symlink therefore disables the
+# focus patch SILENTLY, and background-tab clicks and key presses just stop
+# working with no error. Turn that into a visible warning.
+_AH="${XDG_CONFIG_HOME:-$HOME/.config}/browser-harness/agent-workspace/agent_helpers.py"
+if [ -L "$_AH" ] && [ ! -e "$_AH" ]; then
+  echo "browser-harness: $_AH is a broken symlink — the focus patch is DISABLED," >&2
+  echo "  so click_at_xy/press_key/fill_input will silently do nothing on a background tab." >&2
+  echo "  Restore it: re-run install.sh in the open-browser-use repo." >&2
+fi
+unset _AH
+
+# --- 4. stop daemons of ended sessions ----------------------------------------
+# Nothing else stops them (see bh-reap). Detached and at most every 10 minutes,
+# so the call it rides on never waits for it.
+_REAP_STAMP="${XDG_CONFIG_HOME:-$HOME/.config}/browser-harness/runtime/.bh-reap"
+if [ -z "$(find "$_REAP_STAMP" -mmin -10 2>/dev/null)" ]; then
+  touch "$_REAP_STAMP"
+  ("$(dirname "$(realpath "$0")")/bh-reap" >"${_REAP_STAMP%/*}/../tmp/bh-reap.log" 2>&1 &)
+fi
+unset _REAP_STAMP
+
+exec "$REAL" "$@"
