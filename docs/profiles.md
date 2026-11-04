@@ -75,7 +75,7 @@ colour and name makes its windows recognisable at a glance.
 
 | Option | How | Cost |
 |---|---|---|
-| A. Chrome Web Store, unlisted | Install once per profile; it persists, and syncs to a profile signed in to Google. The unsafe flag and CDP loading go away | Developer registration fee, a review for every extension change; open-source users get one-click install |
+| A. Chrome Web Store, unlisted | Install once per profile; it persists, updates itself, and syncs to a profile signed in to Google. The unsafe flag and CDP loading go away; open-source users get one-click install | A review for every extension change (a same-day approval was observed on 2026-11-02). The publisher account exists, but its console read "2 published, limit 2" on 2026-11-02 and a third item is untried. `debugger` is a permission reviewers look at closely |
 | B. Developer mode, "Load unpacked", once per profile | A normal developer install, which should persist across restarts. The unsafe flag and CDP loading go away | One manual step per profile; tied to the repository's path. **Persistence on branded Chrome 156 not yet tested** |
 | C. Keep loading over CDP at every cold start | Open each profile in turn, load into each while it is the default | Chrome takes the screen once per extra profile at every cold start (7) |
 
