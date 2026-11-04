@@ -13,11 +13,11 @@
 # A non-default user-data-dir also sidesteps Chrome 144's per-connection
 # "Allow remote debugging?" sheet (see daemon.py:216-219).
 #
-# Each cold start loads the session-groups extension (one tab group per agent
-# session, driven by agent_helpers.py). Chrome keeps a CDP-loaded extension
-# only while launched with --enable-unsafe-extension-debugging and drops it
-# from the profile on the next launch, so it is reloaded every time. The flag
-# adds no reach: whoever can talk CDP on this port already controls the browser.
+# The session-groups extension (one tab group per agent session, driven by
+# agent_helpers.py) is installed once per profile with chrome://extensions →
+# "Load unpacked", which Chrome keeps across restarts (Chrome 156, 2026-11-04).
+# It cannot be installed from here: branded Chrome ignores --load-extension,
+# and a CDP-loaded extension is gone at the next launch.
 
 PORT="${BH_AGENT_CHROME_PORT:-9333}"
 PROFILE="${BH_AGENT_CHROME_PROFILE:-$HOME/.local/share/agent-chrome}"
@@ -34,37 +34,6 @@ if [ -z "${BH_AGENT_CHROME_LOCKED:-}" ]; then
 fi
 
 alive() { curl -sf -m 1 "$ENDPOINT" >/dev/null 2>&1; }
-
-# Load the session-groups extension unless Chrome already has it. Ask Chrome
-# every time rather than trusting a record of having loaded it: 2026-10-12 a
-# Chrome came up without it, and 2026-10-31 a running Chrome dropped it hours
-# after loading it (process unchanged, gone from chrome://extensions), and every
-# later tab went ungrouped until someone noticed. Loading again while it is loaded
-# would reload it and strand the content scripts in open tabs, hence the check.
-ensure_session_groups() {
-  [ -d "$GROUPS_EXT" ] && [ -x "$BH_PY" ] || return 0
-  "$BH_PY" -I - "$ENDPOINT" "$GROUPS_EXT" <<'PY' ||
-import asyncio, json, sys, urllib.request, websockets
-
-async def main(endpoint, path):
-    ws_url = json.load(urllib.request.urlopen(endpoint))["webSocketDebuggerUrl"]
-    async with websockets.connect(ws_url, max_size=None) as ws:
-        async def call(i, method, **params):
-            await ws.send(json.dumps({"id": i, "method": method, "params": params}))
-            while True:
-                m = json.loads(await asyncio.wait_for(ws.recv(), 10))
-                if m.get("id") == i:
-                    if "error" in m:
-                        sys.exit(m["error"].get("message"))
-                    return m["result"]
-        loaded = (await call(1, "Extensions.getExtensions"))["extensions"]
-        if not any(e["path"] == path and e["enabled"] for e in loaded):
-            await call(2, "Extensions.loadUnpacked", path=path)
-
-asyncio.run(main(*sys.argv[1:]))
-PY
-    { echo "bh-agent-chrome: session-groups extension not loaded; tabs stay ungrouped" >&2; return 1; }
-}
 
 # --restart [--force]: quit and relaunch the agent Chrome, e.g. to pick up
 # extension edits. Every agent session shares this browser, so closing it
@@ -109,7 +78,7 @@ PY
   fi
 fi
 
-alive && { ensure_session_groups; exit 0; }
+alive && exit 0
 
 # Which profile inside the user-data-dir: the one last used, so a profile the
 # user switched to (2026-10-11: Default deleted, signed in as Profile 2) keeps
@@ -148,21 +117,28 @@ if changed:
     json.dump(prefs, open(path, "w"), separators=(",", ":"))
 PY
 
+# Chrome records an unpacked extension by its folder, in Secure Preferences.
+python3 -I - "$PROFILE/$PROFILE_DIR/Secure Preferences" "$GROUPS_EXT" <<'PY' 2>/dev/null ||
+import json, os, sys
+
+settings = json.load(open(sys.argv[1]))["extensions"]["settings"]
+ext = os.path.realpath(sys.argv[2])
+sys.exit(not any(os.path.realpath(s.get("path", "")) == ext for s in settings.values()))
+PY
+  { echo "bh-agent-chrome: the session-groups extension is not installed in this profile; tabs stay ungrouped." >&2
+    echo "  Once: chrome://extensions → Developer mode → Load unpacked → $GROUPS_EXT" >&2; }
+
 open -g -n -a "${BH_AGENT_CHROME_APP:-Google Chrome}" --args \
   --user-data-dir="$PROFILE" \
   --profile-directory="$PROFILE_DIR" \
   --remote-debugging-port="$PORT" \
   --no-first-run \
   --no-default-browser-check \
-  --disable-features=ChromeWhatsNewUI \
-  --enable-unsafe-extension-debugging
+  --disable-features=ChromeWhatsNewUI
 
 i=0
 while [ "$i" -lt 60 ]; do
-  if alive; then
-    ensure_session_groups
-    exit 0
-  fi
+  alive && exit 0
   sleep 0.5
   i=$((i + 1))
 done

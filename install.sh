@@ -56,3 +56,6 @@ for dir in ${BH_SKILL_DIRS:-"$HOME/.claude/skills" "$HOME/.codex/skills"}; do
   ln -sfn "$BH_SRC/interaction-skills" "$dir/browser-harness/interaction-skills"
   echo "skill: $dir/browser-harness"
 done
+
+echo
+echo "Once, in the agent Chrome: chrome://extensions → Developer mode → Load unpacked → $REPO/extension"

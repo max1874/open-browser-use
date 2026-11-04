@@ -25,22 +25,22 @@ check that limit first.
 
 ## Moving off the private predecessor
 
-The setup this came from lives in a private repository that is to be archived
-once this one works. Before that:
+Switched on the author's Mac on 2026-11-05: the commands, helpers and skill
+come from this repository. Still open, all needing an unlocked screen:
 
-- Switch the live install over (`install.sh` from here), then reload the
-  extension from its new path.
-- Decide where the machine-specific parts go: a launchd keeper that keeps the
-  agent Chrome running, native-messaging-host links for extensions that talk to
-  a desktop app, and bookmark and favicon syncing for a launcher. Of these, the
-  native-host links are a general problem (any such extension cannot reach its
-  app from a separate profile) and may belong here.
+- "Load unpacked" `extension/` in the running agent Chrome (the picker cannot
+  be scripted, docs/design.md), then delete the predecessor's CDP-loaded copy
+  (`dogdonim…`, identical worker), and confirm `bh-agent-chrome`'s Secure
+  Preferences check finds the new one.
+- Then hand the launchd keeper to its new home (a personal repository) with its
+  `install.sh`. Until then the old keeper still cold-starts Chrome with the
+  predecessor's launcher, which loads the old extension: the safe fallback.
+- Then archive the predecessor.
 
 ## Known gaps, no plan
 
 - **Chromium browsers other than Google Chrome.** `BH_AGENT_CHROME_APP` exists;
-  whether Edge, Brave or Chromium honour `--load-extension` (which would make the
-  `loadUnpacked` workaround unnecessary there) is untested.
+  none has been tried.
 - **Tabs a page opens by itself** are not grouped, so `close_session()` does not
   see them.
 - **Sub-agents** inherit their parent's session id and share its tabs. Telling

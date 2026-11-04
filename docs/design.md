@@ -83,13 +83,16 @@ Details that cost a debugging session each:
   publishes `self.bhApi`; the helpers compare it with their own `_GROUPS_API`
   and reload the extension on a mismatch, carrying the tab marks across.
   Change a worker function, bump both numbers.
-- **Branded Chrome ignores `--load-extension` since 137.** The extension is
-  loaded with CDP `Extensions.loadUnpacked`, which needs Chrome launched with
-  `--enable-unsafe-extension-debugging`, and Chrome drops such an extension from
-  the profile on the next launch without the flag. So the flag is always on,
-  and `bh-agent-chrome` asks Chrome whether the extension is loaded on every
-  call. Twice it was missing from a running Chrome. The flag adds no reach:
-  whoever can speak CDP on that port already controls the browser.
+- **Installed by hand, once per profile.** Branded Chrome ignores
+  `--load-extension` since 137. CDP `Extensions.loadUnpacked` needs
+  `--enable-unsafe-extension-debugging` and the extension is gone at the next
+  launch; loaded that way and re-loaded on every call, it twice went missing
+  from a running Chrome. chrome://extensions → "Load unpacked" persists across
+  restarts without any flag (Chrome 156, 2026-11-04) and is the only install
+  path. It cannot be scripted: a synthetic CDP drop reaches the page but not
+  the browser ("No dragged path"), and `developerPrivate.loadDirectory` crashed
+  Chrome. `bh-agent-chrome` reads the profile's Secure Preferences before a
+  cold start and says so when the extension is missing.
 - **Group colour** is a hash of `BU_NAME`, so a session keeps its colour.
 
 ## The pointer

@@ -52,9 +52,13 @@ open-browser-use/install.sh
 `install.sh` is idempotent. It installs browser-harness as a uv tool, links the
 wrapper and the helpers into place, turns browser-harness's data collection off,
 and copies the skill into `~/.claude/skills` and `~/.codex/skills` when they
-exist. The agent Chrome starts on the first browser call, and loads the
-extension from the repository. Each [release](https://github.com/max1874/open-browser-use/releases)
-also carries the extension as a zip, made by `scripts/release.sh`.
+exist. The agent Chrome starts on the first browser call.
+
+Then, once, install the extension in the agent Chrome: open
+`chrome://extensions`, turn on Developer mode, click "Load unpacked" and choose
+the repository's `extension/` folder. Chrome keeps it from then on. Each
+[release](https://github.com/max1874/open-browser-use/releases) also carries
+the extension as a zip, made by `scripts/release.sh`.
 
 The agent Chrome is a separate profile, so it starts logged out. To sign in to a
 site once, for every later session:
