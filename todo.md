@@ -5,13 +5,11 @@ meant to move and what each item is blocked on. Nothing here is scheduled.
 
 ## Before the repository goes public
 
-**Install from scratch and run it.** Everything here ran daily on one Mac
-through a private predecessor, but this copy differs from it: the pointer is a
-new drawing, the extension moved from `session-groups/` to `extension/` (which
-also changes its id), and the machine-specific parts were removed. None of that
-has run. Done when `install.sh` on a clean user account gives grouped tabs, a
-visible pointer and trusted background clicks (the click check in
-docs/design.md), and a screenshot of each goes into the README.
+**README screenshots.** `install.sh` on a clean account of a second Mac
+(Chrome 156, 2026-11-04) gave grouped tabs, a drawn pointer and trusted
+background clicks, read from the extension and the page. The tab groups as the
+user sees them were not captured: `screencapture` over ssh has no display.
+Done when a screenshot of each is in the README.
 
 **A demo.** open-computer-use leads with a recording; this needs one too:
 two agent sessions working in their own named groups while the user keeps
@@ -20,21 +18,10 @@ typing in another app.
 **An extension icon.** The manifest has none, so Chrome shows its default
 puzzle piece. The previous icon was not ours to publish.
 
-**Polish the skill.** Measured over 95 Claude Code sessions (October 2026):
-- `js()` failed 129 times in 8 sessions on `Identifier 'x' has already been
-  declared` (top-level `const` persists between calls). Fix in the helper:
-  retry inside its own scope.
-- `capture_screenshot(path)` failed 36 times in 10 sessions because the
-  directory did not exist. Fix in the helper: create it.
-- 7,683 fixed `time.sleep` calls, about 8.5 hours in total; `wait_for_element`
-  and `wait_for_network_idle` were used in 0 sessions. The skill never
-  mentions them. List the real helpers in the skill.
-- `activate_tab()` was called in 14 sessions against the skill's rule, nearly
-  always to show the user a handoff tab. `mark_tab("handoff")` should bring the
-  tab forward itself.
-- Agents guessed helpers that do not exist (`screenshot`, `goto`, `navigate`).
-- The skill still carries upstream sections that do not apply here: cloud
-  browsers, recordings, domain skills, the remote-debugging approval prompt.
+**A Chrome Web Store listing, last.** Releases carry the extension as a zip
+(`scripts/release.sh`). The store gives one-click install but reviews every
+change, and the publisher account showed "2 published, limit 2" on 2026-11-02;
+check that limit first.
 
 ## Moving off the private predecessor
 
