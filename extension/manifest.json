@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "open-browser-use session groups",
+  "name": "Open Browser Use",
   "version": "0.1.0",
-  "description": "Groups each agent session's tabs and shows the agent's pointer on the tab it drives.",
+  "description": "Groups each agent session's tabs, shows the agent's pointer on the tab it drives, and keeps tabs left for you open.",
   "permissions": [
     "tabs",
     "tabGroups",
