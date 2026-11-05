@@ -29,8 +29,8 @@ agent (Claude Code / Codex)
   ▼
 bin/browser-harness            wrapper with the upstream name, so every doc and example still works
   ├─ BU_NAME = cc-<session> / cx-<thread>       one daemon + one set of tabs per session
-  ├─ BU_CDP_URL = 127.0.0.1:9333                bin/bh-agent-chrome starts the agent Chrome if needed
-  └─ every 10 min, detached: bin/bh-reap        stop ended sessions' daemons, close their groups
+  ├─ BU_CDP_URL = 127.0.0.1:9333                bin/open-browser-use starts the agent Chrome if needed
+  └─ every 10 min: open-browser-use reap        stop ended sessions' daemons, close their groups
   ▼
 browser-harness daemon ──CDP──► agent Chrome (own profile, own port)
   │                                 └─ extension/  tab groups, pointer, tab marks
@@ -64,7 +64,7 @@ The agent Chrome is a separate profile, so it starts logged out. To sign in to a
 site once, for every later session:
 
 ```bash
-open -a "Google Chrome" --args --user-data-dir="$HOME/.local/share/agent-chrome"
+open -a "Google Chrome" --args --user-data-dir="$HOME/.local/share/open-browser-use/chrome"
 ```
 
 ## What the agent calls
@@ -74,7 +74,7 @@ Everything browser-harness offers, plus:
 ```python
 name_session("🧾 Download invoices")   # once, when browser work starts: names the tab group
 new_tab("https://example.com")          # grouped under this session automatically
-click_at_xy(x, y)                       # the pointer glides there first (BH_CURSOR=0 to turn off)
+click_at_xy(x, y)                       # the pointer glides there first (OBU_CURSOR=0 to turn off)
 mark_tab("handoff")                     # the user has to act here: keep it open
 mark_tab("deliverable")                 # a result the user should look at: keep it open
 close_session()                         # close this session's tabs, except the marked ones
@@ -87,12 +87,12 @@ tells agents when to call each of these.
 
 - **Chromium only.** Everything here and in browser-harness speaks the Chrome
   DevTools Protocol, and the tab groups use `chrome.tabGroups`. Firefox dropped
-  CDP; Safari never had it. `BH_AGENT_CHROME_APP` can name Edge, Brave or
+  CDP; Safari never had it. `OBU_CHROME_APP` can name Edge, Brave or
   Chromium, but only Google Chrome has been tested.
 - **macOS only.** The launcher uses `open -g` to start Chrome without raising it.
 - **Codex's sandbox cannot launch Chrome.** It blocks LaunchServices, so `open`
   fails inside it. Start the agent Chrome once from a normal terminal
-  (`bh-agent-chrome`); after that Codex connects normally.
+  (`open-browser-use start`); after that Codex connects normally.
 - **Sub-agents share their parent's session id**, so they share its tabs. Give
   each browser sub-agent its own `BU_NAME`.
 - **Only tabs opened with `new_tab()` are grouped.** A tab a page opens by

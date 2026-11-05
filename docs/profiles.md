@@ -45,8 +45,8 @@ that profile (6). The hard part is getting the extension into every profile
 ```
 
 **Which profile a session uses**: the first profile whose `paths` contains the
-working directory, otherwise `default`; `BH_PROFILE=work` overrides. The wrapper
-resolves it once and exports `BH_PROFILE`, the same way it derives `BU_NAME`, so
+working directory, otherwise `default`; `OBU_PROFILE=work` overrides. The wrapper
+resolves it once and exports `OBU_PROFILE`, the same way it derives `BU_NAME`, so
 agents never pass it. Sub-agents inherit the working directory and therefore the
 profile.
 
@@ -60,7 +60,7 @@ false})` when the profile has no window), map the tab to its CDP target with
 **Telling the workers apart**: each worker stores its profile name in its own
 `chrome.storage.local` when the extension is set up in that profile.
 
-**Groups, marks, `close_session()`, `bh-reap`**: unchanged per worker; anything
+**Groups, marks, `close_session()`, the reaper**: unchanged per worker; anything
 that walks sessions walks every profile's worker.
 
 **Cold start**: every configured profile must be open, so the launcher opens

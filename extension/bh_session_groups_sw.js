@@ -3,7 +3,7 @@
 //   bhNameSession(key, title)             name_session(): retitle the session's group
 //   bhMarkTab(targetId, status)           mark_tab(): "deliverable" / "handoff" keeps the tab open, null clears
 //   bhCloseSession(key)                   close_session(): close the session's tabs except marked ones
-//   bhSessionKeys() / bhReapSession(key, all)  bin/bh-reap: close an ended session's tabs
+//   bhSessionKeys() / bhReapSession(key, all)  libexec/reap.py: close an ended session's tabs
 // key is BU_NAME, one per agent session.
 //
 // CDP has no tab-group API, and chrome.tabs has no CDP targetId, so the bridge
@@ -116,7 +116,7 @@ self.bhCloseSession = async (key) => {
   return { closed: close.length, kept: tabs.length - close.length };
 };
 
-// For bin/bh-reap, on sessions that have ended: close_session() on their
+// For libexec/reap.py, on sessions that have ended: close_session() on their
 // behalf (marked tabs too when all is true), and forget the session once
 // nothing of its group is left. Agents only call close_session() when they
 // remember to, and marked tabs never closed at all (2026-10-13).

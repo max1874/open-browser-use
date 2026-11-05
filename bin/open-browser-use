@@ -1,0 +1,155 @@
+#!/bin/sh
+# open-browser-use — the agent Chrome. Installed as a symlink by ../install.sh.
+#
+#   open-browser-use [start]            start it unless it is running (the wrapper does this)
+#   open-browser-use restart [--force]  quit and relaunch it
+#   open-browser-use reap               clean up after ended sessions (../libexec/reap.py)
+#
+# One long-lived Chrome with its own data directory, listening on a fixed CDP
+# port. All agent sessions share it, so logins persist across sessions and the
+# user's everyday Chrome is never touched. OBU_CHROME_APP names another
+# Chromium-family app; only Google Chrome has been tested.
+#
+# Launched with `open -g` (do not bring the app to the foreground) so starting
+# it never steals focus from whatever the user is doing. A non-default
+# user-data-dir also sidesteps Chrome 144's per-connection "Allow remote
+# debugging?" sheet (see daemon.py:216-219).
+#
+# The extension (one tab group per agent session, the pointer, tab marks) is
+# installed once per profile with chrome://extensions → "Load unpacked", which
+# Chrome keeps across restarts (Chrome 156, 2026-11-04). It cannot be installed
+# from here: branded Chrome ignores --load-extension, and a CDP-loaded extension
+# is gone at the next launch.
+
+PORT="${OBU_PORT:-9333}"
+DATA="${OBU_CHROME_DATA:-$HOME/.local/share/open-browser-use/chrome}"
+ENDPOINT="http://127.0.0.1:$PORT/json/version"
+REPO="$(dirname "$(dirname "$(realpath "$0")")")"
+EXTENSION="${OBU_EXTENSION:-$REPO/extension}"
+BH_PY="$HOME/.local/share/uv/tools/browser-harness/bin/python3"
+
+case "${1:-start}" in
+  start|restart) ;;
+  reap) [ -x "$BH_PY" ] || exit 0; exec "$BH_PY" -I "$REPO/libexec/reap.py" ;;
+  *) echo "usage: open-browser-use [start | restart [--force] | reap]" >&2; exit 2 ;;
+esac
+
+# One launcher at a time: a supervisor that relaunches Chrome as soon as it
+# exits would otherwise race a restart into two cold starts.
+if [ -z "${OBU_LOCKED:-}" ]; then
+  mkdir -p "$DATA"
+  export OBU_LOCKED=1
+  exec lockf -k "$DATA/.launch.lock" "$0" "$@"
+fi
+
+alive() { curl -sf -m 1 "$ENDPOINT" >/dev/null 2>&1; }
+
+# restart [--force]: e.g. to pick up launch flags. Every agent session shares
+# this browser, so closing it closes their tabs mid-task (2026-10-10 a restart
+# closed another session's login page the user was about to use). Refuse while
+# another session's daemon is alive; --force is for when the user has said it
+# is fine.
+if [ "${1:-}" = "restart" ]; then
+  self=""
+  if [ -n "${CLAUDE_CODE_SESSION_ID:-}" ]; then self="cc-${CLAUDE_CODE_SESSION_ID%%-*}"
+  elif [ -n "${CODEX_THREAD_ID:-}" ]; then self="cx-${CODEX_THREAD_ID%%-*}"; fi
+  self="${BU_NAME:-$self}"
+  others=""
+  for f in "${XDG_CONFIG_HOME:-$HOME/.config}"/browser-harness/runtime/bu-*.pid; do
+    [ -e "$f" ] || continue
+    name=$(basename "$f" .pid); name=${name#bu-}
+    [ "$name" = "$self" ] && continue
+    pid=$(cat "$f" 2>/dev/null)
+    [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null && others="$others $name"
+  done
+  if [ -n "$others" ] && [ "${2:-}" != "--force" ]; then
+    echo "open-browser-use: not restarting — other sessions have live daemons:$others" >&2
+    echo "  Closing Chrome would close their tabs. Ask the user, then use restart --force." >&2
+    exit 2
+  fi
+  if alive; then
+    "$BH_PY" -I - "$ENDPOINT" <<'PY'
+import asyncio, json, sys, urllib.request, websockets
+
+async def main(endpoint):
+    ws_url = json.load(urllib.request.urlopen(endpoint))["webSocketDebuggerUrl"]
+    async with websockets.connect(ws_url) as ws:
+        await ws.send(json.dumps({"id": 1, "method": "Browser.close"}))
+        try:
+            await asyncio.wait_for(ws.recv(), 5)
+        except Exception:
+            pass
+
+asyncio.run(main(sys.argv[1]))
+PY
+    i=0
+    while pgrep -f "user-data-dir=$DATA" >/dev/null && [ "$i" -lt 40 ]; do sleep 0.5; i=$((i + 1)); done
+  fi
+fi
+
+alive && exit 0
+
+# Which profile inside the data directory: the one last used, so a profile the
+# user switched to (2026-10-11: Default deleted, signed in as Profile 2) keeps
+# working. Naming it on the command line also skips the profile picker Chrome
+# shows at launch once there are several profiles.
+PROFILE="${OBU_CHROME_PROFILE:-$(python3 -I - "$DATA/Local State" <<'PY' 2>/dev/null
+import json, sys
+print(json.load(open(sys.argv[1]))["profile"]["last_used"])
+PY
+)}"
+PROFILE="${PROFILE:-Default}"
+
+# Profile prefs: vertical tabs, saved-groups bar hidden. Chrome rewrites
+# Preferences on exit, so they can only be set while it is down — i.e. here,
+# before every cold start, for whichever profile is about to open.
+mkdir -p "$DATA/$PROFILE"
+python3 -I - "$DATA/$PROFILE/Preferences" <<'PY' || echo "open-browser-use: could not set profile prefs" >&2
+import json, os, sys
+
+path = sys.argv[1]
+WANT = {
+    ("vertical_tabs", "enabled"): True,
+    ("bookmark_bar", "show_tab_groups"): False,
+}
+prefs = json.load(open(path)) if os.path.exists(path) else {}
+changed = False
+for keys, value in WANT.items():
+    node = prefs
+    for k in keys[:-1]:
+        node = node.setdefault(k, {})
+    if node.get(keys[-1]) != value:
+        node[keys[-1]] = value
+        changed = True
+if changed:
+    json.dump(prefs, open(path, "w"), separators=(",", ":"))
+PY
+
+# Chrome records an unpacked extension by its folder, in Secure Preferences.
+python3 -I - "$DATA/$PROFILE/Secure Preferences" "$EXTENSION" <<'PY' 2>/dev/null ||
+import json, os, sys
+
+settings = json.load(open(sys.argv[1]))["extensions"]["settings"]
+ext = os.path.realpath(sys.argv[2])
+sys.exit(not any(os.path.realpath(s.get("path", "")) == ext for s in settings.values()))
+PY
+  { echo "open-browser-use: the extension is not installed in this profile; tabs stay ungrouped." >&2
+    echo "  Once: chrome://extensions → Developer mode → Load unpacked → $EXTENSION" >&2; }
+
+open -g -n -a "${OBU_CHROME_APP:-Google Chrome}" --args \
+  --user-data-dir="$DATA" \
+  --profile-directory="$PROFILE" \
+  --remote-debugging-port="$PORT" \
+  --no-first-run \
+  --no-default-browser-check \
+  --disable-features=ChromeWhatsNewUI
+
+i=0
+while [ "$i" -lt 60 ]; do
+  alive && exit 0
+  sleep 0.5
+  i=$((i + 1))
+done
+
+echo "open-browser-use: no CDP endpoint on port $PORT after 30s (data: $DATA)" >&2
+exit 1

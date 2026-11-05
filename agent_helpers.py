@@ -35,7 +35,7 @@ Codex-style cursor and tab status
 click_at_xy() and scroll() first glide a glowing pointer (drawn by the same
 extension) to the target and wait for it to arrive, so a person watching sees
 where the agent acts. capture_screenshot() hides it for the shot.
-BH_CURSOR=0 turns the cursor off. mark_tab() marks a tab as "deliverable" or
+OBU_CURSOR=0 turns the cursor off. mark_tab() marks a tab as "deliverable" or
 "handoff"; close_session() closes the session's tabs when its browser work is
 done, keeping the marked ones.
 """
@@ -188,7 +188,7 @@ def _recover_closed_tab():
     page-level call finds its session stale and opens a fresh about:blank.
     Upstream new_tab() makes such calls (focus emulation, unmarking the old
     tab) and then opens its own tab as well, so that about:blank was left
-    ungrouped, outside close_session() and bh-reap, until the daemon stopped
+    ungrouped, outside close_session() and the reaper, until the daemon stopped
     (2026-10-16: one per session in the agent Chrome). Triggering the
     replacement first lets new_tab() reuse it.
     """
@@ -219,7 +219,7 @@ new_tab.__doc__ = _new_tab.__doc__
 
 # --- Codex-style cursor --------------------------------------------------------
 
-_CURSOR_ON = os.environ.get("BH_CURSOR", "").strip().lower() not in {"0", "false", "no", "off"}
+_CURSOR_ON = os.environ.get("OBU_CURSOR", "").strip().lower() not in {"0", "false", "no", "off"}
 _CURSOR_GLIDE_S = 0.32  # the extension's CSS transition is 0.3s
 
 
@@ -307,7 +307,7 @@ del _f, _orig
 # --- Tab status ----------------------------------------------------------------
 
 def mark_tab(status, target=None):
-    """Mark a tab as held for the user, so close_session() and bh-reap leave it open.
+    """Mark a tab as held for the user, so close_session() and the reaper leave it open.
 
     status: "deliverable" (a result the user should look at),
             "handoff" (the user has to act here, e.g. log in or approve; the
@@ -326,8 +326,8 @@ def mark_tab(status, target=None):
     if ok and status:
         # The daemon closes its own first tab when it stops, and new_tab()
         # usually reuses that tab for work: a result marked there vanished when
-        # bh-reap stopped the session's daemon (2026-10-16). Hand it over;
-        # bh-reap's group cleanup now decides when it closes.
+        # The reaper stopped the session's daemon (2026-10-16). Hand it over;
+        # its group cleanup now decides when it closes.
         try:
             _bh._send({"meta": "release_target", "target_id": target_id})
         except Exception:

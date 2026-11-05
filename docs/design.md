@@ -7,7 +7,7 @@ Three constraints decide everything else:
 2. **Never take the user's screen.** Chrome is started with `open -g`, tabs are
    attached without being selected, and nothing calls `activate_tab()` on its own.
 3. **Keep logins across sessions.** The profile lives in a fixed directory
-   (`~/.local/share/agent-chrome`) and the browser stays up between sessions.
+   (`~/.local/share/open-browser-use/chrome`) and the browser stays up between sessions.
 
 ## The wrapper keeps the upstream name
 
@@ -22,7 +22,7 @@ setting two variables:
 
 - `BU_NAME` from the agent's own session id: `CLAUDE_CODE_SESSION_ID` gives
   `cc-<first segment>`, `CODEX_THREAD_ID` gives `cx-<first segment>`.
-- `BU_CDP_URL` pointing at the agent Chrome, after `bh-agent-chrome` has made
+- `BU_CDP_URL` pointing at the agent Chrome, after `open-browser-use start` has made
   sure it is running.
 
 It keeps the name `browser-harness` on purpose. Every upstream document and
@@ -91,7 +91,7 @@ Details that cost a debugging session each:
   restarts without any flag (Chrome 156, 2026-11-04) and is the only install
   path. It cannot be scripted: a synthetic CDP drop reaches the page but not
   the browser ("No dragged path"), and `developerPrivate.loadDirectory` crashed
-  Chrome. `bh-agent-chrome` reads the profile's Secure Preferences before a
+  Chrome. `open-browser-use` reads the profile's Secure Preferences before a
   cold start and says so when the extension is missing.
 - **Group colour** is a hash of `BU_NAME`, so a session keeps its colour.
 
@@ -115,7 +115,7 @@ only when they remember to. On one day there were 13 idle daemons, the oldest a
 day old, and the agent Chrome held groups from sessions that ended 16 hours
 earlier.
 
-`bin/bh-reap` runs detached from the wrapper, at most every ten minutes. A
+`open-browser-use reap` (`libexec/reap.py`) runs detached from the wrapper, at most every ten minutes. A
 session has ended when its agent's own records say so:
 
 | Name | Ended when |
@@ -132,7 +132,7 @@ mistaken stop costs little: the session's next call starts a new daemon.
 
 Every session's tabs live in one Chrome, so restarting it closes work in
 progress. It happened: a restart to load a new extension closed another
-session's login page that the user was about to use. `bh-agent-chrome --restart`
+session's login page that the user was about to use. `open-browser-use restart`
 now refuses while another session's daemon is alive, and only `--force`, after
 the user agrees, goes ahead. Browser-wide settings count the same: turning off
 tab sync once closed every session's groups, because Chrome removes

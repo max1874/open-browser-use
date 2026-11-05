@@ -11,8 +11,8 @@
 # with uv's own symlink. Re-run ../install.sh to restore this shim.
 
 REAL="$HOME/.local/share/uv/tools/browser-harness/bin/browser-harness"
-AGENT_CHROME="$(dirname "$(realpath "$0")")/bh-agent-chrome"
-AGENT_CDP_URL="http://127.0.0.1:${BH_AGENT_CHROME_PORT:-9333}"
+OBU="$(dirname "$(realpath "$0")")/open-browser-use"
+AGENT_CDP_URL="http://127.0.0.1:${OBU_PORT:-9333}"
 
 # --- 1. per-session daemon name -------------------------------------------
 if [ -z "${BU_NAME:-}" ]; then
@@ -38,12 +38,12 @@ case "${1:-}" in
 esac
 if [ -z "$_skip_chrome" ] &&
    [ -z "${BU_CDP_URL:-}" ] && [ -z "${BU_CDP_WS:-}" ] && [ -z "${BU_BROWSER_ID:-}" ] &&
-   [ -z "${BH_USE_DEFAULT_CHROME:-}" ]; then
-  if "$AGENT_CHROME"; then
+   [ -z "${OBU_USE_DEFAULT_CHROME:-}" ]; then
+  if "$OBU" start; then
     BU_CDP_URL="$AGENT_CDP_URL"
     export BU_CDP_URL
   else
-    echo "browser-harness: agent Chrome unavailable; set BH_USE_DEFAULT_CHROME=1 to fall back to the everyday Chrome." >&2
+    echo "browser-harness: agent Chrome unavailable; set OBU_USE_DEFAULT_CHROME=1 to fall back to the everyday Chrome." >&2
     exit 1
   fi
 fi
@@ -63,14 +63,14 @@ fi
 unset _AH
 
 # --- 4. stop daemons of ended sessions ----------------------------------------
-# Nothing else stops them (see bh-reap). Detached and at most every 10 minutes,
-# so the call it rides on never waits for it.
-_REAP_STAMP="${XDG_CONFIG_HOME:-$HOME/.config}/browser-harness/runtime/.bh-reap"
-if [ -z "$(find "$_REAP_STAMP" -mmin -10 2>/dev/null)" ]; then
-  mkdir -p "${_REAP_STAMP%/*}" "${_REAP_STAMP%/*}/../tmp"  # absent until the first daemon starts
-  touch "$_REAP_STAMP"
-  ("$(dirname "$(realpath "$0")")/bh-reap" >"${_REAP_STAMP%/*}/../tmp/bh-reap.log" 2>&1 &)
+# Nothing else stops them (see libexec/reap.py). Detached and at most every 10
+# minutes, so the call it rides on never waits for it.
+_REAP="$HOME/.local/share/open-browser-use/reap"
+if [ -z "$(find "$_REAP.stamp" -mmin -10 2>/dev/null)" ]; then
+  mkdir -p "${_REAP%/*}"
+  touch "$_REAP.stamp"
+  ("$OBU" reap >"$_REAP.log" 2>&1 &)
 fi
-unset _REAP_STAMP
+unset _REAP
 
 exec "$REAL" "$@"

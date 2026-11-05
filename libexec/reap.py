@@ -1,37 +1,33 @@
-#!/bin/sh
-# bh-reap — clean up after agent sessions that have ended: stop their
-# browser-harness daemons and close their tab groups in the agent Chrome.
-# Run in the background by ./browser-harness (at most every 10 minutes); safe
-# to run by hand.
-#
-# One daemon per session (BU_NAME = cc-<id>/cx-<id>, see ./browser-harness),
-# and nothing stops them when the session ends: 2026-10-12 there were 13, the
-# oldest a day old, each holding a CDP connection and a background tab in the
-# agent Chrome. Session end is read from the agents' own records, two signals
-# for Claude Code so neither alone can stop a live session's daemon:
-#
-#   cc-<id>  no running claude process has this session (~/.claude/sessions/
-#            <pid>.json) and its transcript is untouched for an hour
-#   cx-<id>  its Codex rollout is untouched for a day
-#   other    (BU_NAME set by hand, "default") started over a day ago, or no
-#            daemon left
-#
-# A daemon stopped by mistake costs little: the next browser-harness call in
-# that session starts a new one. Stopping goes through browser-harness's own
-# shutdown (admin.restart_daemon), which closes the daemon's background tab
-# and stops a cloud browser if it holds one.
-#
-# Tab groups: agents are asked to call close_session() when done, but only
-# some do, and the tabs it keeps for the user (mark_tab) were never closed:
-# 2026-10-13 the agent Chrome held groups of sessions ended 16 hours before.
-# So an ended session's group is closed here too (session-groups extension,
-# bhReapSession), unmarked tabs at once and marked ones a day after the end.
-# Tabs outside our groups (Codex's own @Chrome groups, ungrouped tabs) have no
-# owner to read and are left alone.
+"""open-browser-use reap — clean up after agent sessions that have ended: stop their
+browser-harness daemons and close their tab groups in the agent Chrome.
+Run in the background by bin/browser-harness (at most every 10 minutes); safe
+to run by hand.
 
-BH_PY="$HOME/.local/share/uv/tools/browser-harness/bin/python3"
-[ -x "$BH_PY" ] || exit 0
-exec "$BH_PY" -I - <<'PY'
+One daemon per session (BU_NAME = cc-<id>/cx-<id>, see bin/browser-harness),
+and nothing stops them when the session ends: 2026-10-12 there were 13, the
+oldest a day old, each holding a CDP connection and a background tab in the
+agent Chrome. Session end is read from the agents' own records, two signals
+for Claude Code so neither alone can stop a live session's daemon:
+
+  cc-<id>  no running claude process has this session (~/.claude/sessions/
+           <pid>.json) and its transcript is untouched for an hour
+  cx-<id>  its Codex rollout is untouched for a day
+  other    (BU_NAME set by hand, "default") started over a day ago, or no
+           daemon left
+
+A daemon stopped by mistake costs little: the next browser-harness call in
+that session starts a new one. Stopping goes through browser-harness's own
+shutdown (admin.restart_daemon), which closes the daemon's background tab
+and stops a cloud browser if it holds one.
+
+Tab groups: agents are asked to call close_session() when done, but only
+some do, and the tabs it keeps for the user (mark_tab) were never closed:
+2026-10-13 the agent Chrome held groups of sessions ended 16 hours before.
+So an ended session's group is closed here too (the extension's
+bhReapSession), unmarked tabs at once and marked ones a day after the end.
+Tabs outside our groups (Codex's own @Chrome groups, ungrouped tabs) have no
+owner to read and are left alone.
+"""
 import glob, json, os, sys, time, urllib.request
 from browser_harness import _ipc as ipc
 from browser_harness.admin import restart_daemon
@@ -103,9 +99,9 @@ for pid_file in sorted(glob.glob(str(ipc._RUNTIME / "bu-*.pid"))):
     try:
         restart_daemon(name)  # also clears the endpoint and pid file of a dead one
     except Exception as e:
-        print(f"bh-reap: {name}: {e}", file=sys.stderr)
+        print(f"reap: {name}: {e}", file=sys.stderr)
         continue
-    print(f"bh-reap: {name}: " + ("still running" if alive(pid) else "stopped"))
+    print(f"reap: {name}: " + ("still running" if alive(pid) else "stopped"))
 
 # Daemon logs: one per name ever used, never removed (170 on 2026-10-12).
 for log in glob.glob(str(ipc._TMP / "bu-*.log")):
@@ -120,7 +116,7 @@ SW = "/bh_session_groups_sw.js"
 
 
 def reap_groups():
-    port = os.environ.get("BH_AGENT_CHROME_PORT", "9333")
+    port = os.environ.get("OBU_PORT", "9333")
     try:
         ws_url = json.load(urllib.request.urlopen(f"http://127.0.0.1:{port}/json/version", timeout=2))["webSocketDebuggerUrl"]
     except Exception:
@@ -156,7 +152,7 @@ def reap_groups():
             finally:
                 cdp("Target.closeTarget", targetId=waker)
         if not sw:
-            print("bh-reap: groups: session-groups extension not found", file=sys.stderr)
+            print("reap: groups: extension not found", file=sys.stderr)
             return
         session = cdp("Target.attachToTarget", targetId=sw["targetId"], flatten=True)["sessionId"]
 
@@ -175,7 +171,7 @@ def reap_groups():
                     continue
                 r = ev(f"bhReapSession({json.dumps(key)}, {json.dumps(ended(key, started, DAY))})")
                 if r and r.get("closed"):
-                    print(f"bh-reap: {key}: closed {r['closed']} tab(s), kept {r['kept']}")
+                    print(f"reap: {key}: closed {r['closed']} tab(s), kept {r['kept']}")
         finally:
             cdp("Target.detachFromTarget", sessionId=session)
 
@@ -183,5 +179,4 @@ def reap_groups():
 try:
     reap_groups()
 except Exception as e:
-    print(f"bh-reap: groups: {e}", file=sys.stderr)
-PY
+    print(f"reap: groups: {e}", file=sys.stderr)

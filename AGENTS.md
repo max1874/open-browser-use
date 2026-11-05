@@ -10,7 +10,7 @@ touching the fork, and keep fork patches to what the helpers process cannot reac
 - The agent Chrome is shared by every session on the machine. Never quit it,
   kill another session's daemon or change a browser-wide setting (sync, account,
   profile, extensions) while another session is attached. Restart only through
-  `bh-agent-chrome --restart`, which refuses in that case. Both rules exist
+  `open-browser-use restart`, which refuses in that case. Both rules exist
   because each was broken once and closed someone's tabs.
 - Diagnose "did nothing" by whether the event happened, not by whether the state
   looks right. Background clicks were once misread as "landed but unfocused"

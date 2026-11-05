@@ -25,7 +25,7 @@ check that limit first.
 
 ## Known gaps, no plan
 
-- **Chromium browsers other than Google Chrome.** `BH_AGENT_CHROME_APP` exists;
+- **Chromium browsers other than Google Chrome.** `OBU_CHROME_APP` exists;
   none has been tried.
 - **Tabs a page opens by itself** are not grouped, so `close_session()` does not
   see them.

@@ -24,7 +24,7 @@ or bot-protected pages, or when a direct fetch returns an empty shell.
   delegate browser work, give each sub-agent its own name and tell it to prefix
   every call with it: `BU_NAME=sub-<task> browser-harness <<'PY'`.
 - Never quit Chrome or kill another session's daemon. To restart Chrome, run
-  `bh-agent-chrome --restart`; it refuses while another session is attached,
+  `open-browser-use restart`; it refuses while another session is attached,
   and then you ask the user. Browser-wide settings (sync, account, profile,
   extensions) count the same: ask first.
 - Do not edit `agent_helpers.py`: it is shared and versioned. Define what your
@@ -100,5 +100,5 @@ viewport), read the matching file in `interaction-skills/` next to this one.
 ## When it does not connect
 
 Run `browser-harness --doctor`. If Chrome cannot be launched (Codex's sandbox
-blocks it), ask the user to run `bh-agent-chrome` once in a normal terminal;
+blocks it), ask the user to run `open-browser-use start` once in a normal terminal;
 after that you connect normally.

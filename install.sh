@@ -2,7 +2,7 @@
 # install.sh — set up (or repair) open-browser-use on this Mac. Idempotent.
 #
 #   1. browser-harness itself (the max1874 fork, branch max) as a uv tool
-#   2. ~/.local/bin/{browser-harness,bh-agent-chrome} -> this repo's bin/
+#   2. ~/.local/bin/{browser-harness,open-browser-use} -> this repo's bin/
 #   3. agent_helpers.py (focus patch, session groups) -> browser-harness config
 #   4. data collection off (telemetry, recordings, version check)
 #   5. the skill, into every agent skill directory that exists
@@ -33,9 +33,9 @@ fi
 # --- 2-3. links into this repo --------------------------------------------
 mkdir -p "$BIN" "$CONFIG/agent-workspace"
 ln -sfn "$REPO/bin/browser-harness" "$BIN/browser-harness"
-ln -sfn "$REPO/bin/bh-agent-chrome" "$BIN/bh-agent-chrome"
+ln -sfn "$REPO/bin/open-browser-use" "$BIN/open-browser-use"
 ln -sfn "$REPO/agent_helpers.py" "$CONFIG/agent-workspace/agent_helpers.py"
-echo "linked: $BIN/browser-harness, $BIN/bh-agent-chrome, agent_helpers.py -> $REPO"
+echo "linked: $BIN/browser-harness, $BIN/open-browser-use, agent_helpers.py -> $REPO"
 
 # --- 4. data collection off --------------------------------------------------
 # Telemetry is on by default and sends scripts and their output verbatim; the
@@ -49,7 +49,7 @@ echo "data collection: off"
 # --- 5. skill -----------------------------------------------------------------
 # SKILL.md is copied, never linked: Claude Code and Codex both skip a skill whose
 # SKILL.md is a symlink, silently (the directory itself may be one).
-for dir in ${BH_SKILL_DIRS:-"$HOME/.claude/skills" "$HOME/.codex/skills"}; do
+for dir in ${OBU_SKILL_DIRS:-"$HOME/.claude/skills" "$HOME/.codex/skills"}; do
   [ -d "$dir" ] || continue
   mkdir -p "$dir/browser-harness"
   cp "$REPO/skill/browser-harness/SKILL.md" "$dir/browser-harness/SKILL.md"
