@@ -136,45 +136,43 @@ def reap_groups():
                         raise RuntimeError(f"{method}: {msg['error']}")
                     return msg["result"]
 
-        def worker():
+        def workers():  # one per Chrome profile that has the extension
             infos = cdp("Target.getTargets")["targetInfos"]
-            return next((t for t in infos if t["type"] == "service_worker" and t["url"].endswith(SW)), None)
+            return [t for t in infos if t["type"] == "service_worker" and t["url"].endswith(SW)]
 
-        sw = worker()
-        if not sw:  # asleep: opening a tab wakes it (tabs.onCreated)
+        found = workers()
+        if not found:  # an older worker sleeps when idle: opening a tab wakes it (tabs.onCreated)
             waker = cdp("Target.createTarget", url="about:blank", background=True)["targetId"]
             try:
                 for _ in range(20):
                     time.sleep(0.1)
-                    sw = worker()
-                    if sw:
+                    if found := workers():
                         break
             finally:
                 cdp("Target.closeTarget", targetId=waker)
-        if not sw:
+        if not found:
             print("reap: groups: extension not found", file=sys.stderr)
-            return
-        session = cdp("Target.attachToTarget", targetId=sw["targetId"], flatten=True)["sessionId"]
+        for sw in found:
+            session = cdp("Target.attachToTarget", targetId=sw["targetId"], flatten=True)["sessionId"]
 
-        def ev(expr):
-            r = cdp("Runtime.evaluate", session, expression=expr, awaitPromise=True, returnByValue=True)
-            if "exceptionDetails" in r:
-                raise RuntimeError(r["exceptionDetails"].get("text"))
-            return r["result"].get("value")
+            def ev(expr):
+                r = cdp("Runtime.evaluate", session, expression=expr, awaitPromise=True, returnByValue=True)
+                if "exceptionDetails" in r:
+                    raise RuntimeError(r["exceptionDetails"].get("text"))
+                return r["result"].get("value")
 
-        try:
-            for key in ev("bhSessionKeys()") or []:
-                if key == me:
-                    continue
-                started = started_at(key)
-                if not ended(key, started):
-                    continue
-                r = ev(f"bhReapSession({json.dumps(key)}, {json.dumps(ended(key, started, DAY))})")
-                if r and r.get("closed"):
-                    print(f"reap: {key}: closed {r['closed']} tab(s), kept {r['kept']}")
-        finally:
-            cdp("Target.detachFromTarget", sessionId=session)
-
+            try:
+                for key in ev("bhSessionKeys()") or []:
+                    if key == me:
+                        continue
+                    started = started_at(key)
+                    if not ended(key, started):
+                        continue
+                    r = ev(f"bhReapSession({json.dumps(key)}, {json.dumps(ended(key, started, DAY))})")
+                    if r and r.get("closed"):
+                        print(f"reap: {key}: closed {r['closed']} tab(s), kept {r['kept']}")
+            finally:
+                cdp("Target.detachFromTarget", sessionId=session)
 
 try:
     reap_groups()

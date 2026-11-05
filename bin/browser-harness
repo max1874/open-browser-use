@@ -29,6 +29,26 @@ if [ -z "${BU_NAME:-}" ]; then
   unset _pfx _sid
 fi
 
+# --- 1b. Chrome profile ---------------------------------------------------------
+# Which Chrome profile's logins this session uses: the deepest folder in
+# profiles.json containing the working directory, else its default
+# (docs/profiles.md). Sub-agents inherit both the directory and OBU_PROFILE.
+_CONF="${XDG_CONFIG_HOME:-$HOME/.config}/open-browser-use/profiles.json"
+if [ -z "${OBU_PROFILE:-}" ] && [ -f "$_CONF" ]; then
+  OBU_PROFILE=$(python3 -I - "$_CONF" <<'PY'
+import json, os, sys
+
+conf = json.load(open(sys.argv[1]))
+cwd = os.path.realpath(os.getcwd())
+folders = {os.path.realpath(os.path.expanduser(f)): p for f, p in conf.get("folders", {}).items()}
+inside = [f for f in folders if cwd == f or cwd.startswith(f + os.sep)]
+print(folders[max(inside, key=len)] if inside else conf.get("default", ""))
+PY
+  )
+  [ -n "$OBU_PROFILE" ] && export OBU_PROFILE
+fi
+unset _CONF
+
 # --- 2. agent-dedicated Chrome --------------------------------------------
 # Skipped for subcommands that never touch a browser, and when the caller has
 # already pinned an endpoint (BU_CDP_URL / BU_CDP_WS) or a cloud browser.

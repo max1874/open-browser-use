@@ -15,11 +15,15 @@ or bot-protected pages, or when a direct fetch returns an empty shell.
 
 ## The browser you are driving
 
-- A dedicated **agent Chrome** on its own profile and port 9333, shared by every
-  agent session on this machine. Logins persist across sessions. The user's own
-  browser is never involved.
+- A dedicated **agent Chrome** on its own data directory and port 9333, shared by
+  every agent session on this machine. Logins persist across sessions. The
+  user's own browser is never involved.
+- It can hold several Chrome profiles with different accounts (personal, work).
+  Your session gets the one mapped to your project folder; its tabs open in that
+  profile's windows.
 - The `browser-harness` command already isolates you: it gives your session its
-  own daemon and tabs. Do not set `BU_NAME`, `BU_CDP_URL` or pick a profile.
+  own daemon, tabs and profile. Do not set `BU_NAME`, `BU_CDP_URL` or
+  `OBU_PROFILE`.
 - **Sub-agents** inherit your session id and would share your tab. When you
   delegate browser work, give each sub-agent its own name and tell it to prefix
   every call with it: `BU_NAME=sub-<task> browser-harness <<'PY'`.

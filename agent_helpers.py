@@ -42,6 +42,7 @@ done, keeping the marked ones.
 
 import json
 import os
+import subprocess
 import time
 
 import browser_harness.helpers as _bh
@@ -90,33 +91,34 @@ del _name, _fn
 
 
 _GROUPS_SW = "/bh_session_groups_sw.js"
-_GROUPS_API = 8  # must match self.bhApi in extension/bh_session_groups_sw.js
+_GROUPS_API = 9  # must match self.bhApi in extension/bh_session_groups_sw.js
+_PROFILE = os.environ.get("OBU_PROFILE")  # set by bin/browser-harness from profiles.json
+_OBU = os.path.join(os.path.dirname(os.path.realpath(__file__)), "bin", "open-browser-use")
 
 
 def _session_key():
     return os.environ.get("BU_NAME") or "default"
 
 
-def _find_groups_worker():
+def _find_groups_workers():
     infos = _orig_cdp("Target.getTargets")["targetInfos"]
-    return next((t for t in infos if t["type"] == "service_worker" and t["url"].endswith(_GROUPS_SW)), None)
+    return [t for t in infos if t["type"] == "service_worker" and t["url"].endswith(_GROUPS_SW)]
 
 
-def _wait_groups_worker(wake):
-    """The worker sleeps when idle and wakes on tabs.onCreated. new_tab() has
-    just created a tab; otherwise wake=True opens (and closes) a background
-    about:blank for that."""
-    sw = _find_groups_worker()
-    if sw or not wake:
-        for _ in range(20):  # give it ~2s
-            if sw:
-                return sw
-            time.sleep(0.1)
-            sw = _find_groups_worker()
-        return None
+def _wait_groups_workers(wake):
+    """Our extension's workers, one per Chrome profile that has it. They keep
+    themselves running; wake=True still opens (and closes) a background
+    about:blank when there is none, which wakes a worker from before that."""
+    workers = _find_groups_workers()
+    if workers or not wake:
+        return workers
     waker = _orig_cdp("Target.createTarget", url="about:blank", background=True)["targetId"]
     try:
-        return _wait_groups_worker(wake=False)
+        for _ in range(20):  # give it ~2s
+            time.sleep(0.1)
+            if workers := _find_groups_workers():
+                return workers
+        return []
     finally:
         _orig_cdp("Target.closeTarget", targetId=waker)
 
@@ -131,36 +133,70 @@ def _eval_in(sw, expr):
         _orig_cdp("Target.detachFromTarget", sessionId=sid)
 
 
-def _call_groups_worker(fn, *args, wake=False):
-    """Call fn(*args) in the session-groups extension's worker; None if it never shows up."""
-    sw = _wait_groups_worker(wake)
+def _current(sw):
+    """sw itself, or after reloading a stale worker script, its replacement; None if that fails."""
+    if _eval_in(sw, "self.bhApi") == _GROUPS_API:
+        return sw
+    # A reload clears storage.session, i.e. every session's tab status (tab
+    # ids survive it), so carry them across.
+    status = _eval_in(sw, "chrome.storage.session.get('status').then(r => r.status || {})") or {}
+    try:
+        _eval_in(sw, "chrome.runtime.reload()")
+    except Exception:
+        pass  # the reload tears down the session it was sent on
+    for _ in range(30):
+        time.sleep(0.1)
+        fresh = next((w for w in _find_groups_workers() if w["browserContextId"] == sw["browserContextId"]), None)
+        if fresh and _eval_in(fresh, "self.bhApi") == _GROUPS_API:
+            if status:
+                _eval_in(fresh, f"chrome.storage.session.set({{status: {json.dumps(status)}}})")
+            return fresh
+    return None
+
+
+def _open_profile():
+    """Open a window of this session's Chrome profile, which also starts it, and
+    name its worker, which hands out the window's tab next. Chrome comes to the
+    front: no way to open a profile in the background was found (docs/profiles.md)."""
+    before = {t["targetId"] for t in _orig_cdp("Target.getTargets")["targetInfos"]}
+    subprocess.run([_OBU, "window", _PROFILE], check=True)
+    for _ in range(100):
+        time.sleep(0.1)
+        infos = _orig_cdp("Target.getTargets")["targetInfos"]
+        tab = next((t for t in infos if t["type"] == "page" and t["targetId"] not in before), None)
+        sw = tab and next((t for t in infos if t["type"] == "service_worker" and t["url"].endswith(_GROUPS_SW)
+                           and t["browserContextId"] == tab["browserContextId"]), None)
+        if sw and (sw := _current(sw)):
+            _eval_in(sw, f"bhSetProfile({json.dumps(_PROFILE)}, {json.dumps(tab['targetId'])})")
+            return sw
+    raise RuntimeError(f'the Open Browser Use extension is not running in the Chrome profile "{_PROFILE}": '
+                       "chrome://extensions → Developer mode → Load unpacked → the extension/ folder")
+
+
+def _groups_worker(wake=False, open_profile=False):
+    """The extension's worker in this session's profile; None if there is none."""
+    for sw in _wait_groups_workers(wake):
+        sw = _current(sw)
+        if sw and (not _PROFILE or _eval_in(sw, "bhProfile()") == _PROFILE):
+            return sw
+    return _open_profile() if _PROFILE and open_profile else None
+
+
+def _call_groups_worker(fn, *args, wake=False, open_profile=False, sw=None):
+    """Call fn(*args) in this session's extension worker; None if there is none."""
+    sw = sw or _groups_worker(wake, open_profile)
     if not sw:
         return None
-    if _eval_in(sw, "self.bhApi") != _GROUPS_API:
-        # Stale worker script: reload the extension and use the fresh worker.
-        # A reload clears storage.session, i.e. every session's tab status
-        # (tab ids survive it), so carry them across.
-        status = _eval_in(sw, "chrome.storage.session.get('status').then(r => r.status || {})") or {}
-        try:
-            _eval_in(sw, "chrome.runtime.reload()")
-        except Exception:
-            pass  # the reload tears down the session it was sent on
-        time.sleep(0.5)
-        sw = _wait_groups_worker(wake=True)
-        if not sw or _eval_in(sw, "self.bhApi") != _GROUPS_API:
-            return None
-        if status:
-            _eval_in(sw, f"chrome.storage.session.set({{status: {json.dumps(status)}}})")
     return _eval_in(sw, f"{fn}({', '.join(json.dumps(a) for a in args)})")
 
 
-def _group_tab(target_id):
-    """Put the tab into this session's group via the session-groups extension."""
+def _group_tab(target_id, sw=None):
+    """Put the tab into this session's group via the extension."""
     try:
         key = _session_key()
         agent = {"cc": "Claude", "cx": "Codex"}.get(key.split("-")[0], key)
         default_title = f"{agent} · {os.path.basename(os.getcwd()) or '/'}"
-        _call_groups_worker("bhGroup", target_id, key, default_title)
+        _call_groups_worker("bhGroup", target_id, key, default_title, sw=sw)
     except Exception:
         pass
 
@@ -173,7 +209,7 @@ def name_session(title):
     Returns False if the session-groups extension is not loaded.
     """
     try:
-        return _call_groups_worker("bhNameSession", _session_key(), str(title), wake=True) is not None
+        return _call_groups_worker("bhNameSession", _session_key(), str(title), wake=True, open_profile=True) is not None
     except Exception:
         return False
 
@@ -205,12 +241,32 @@ def _recover_closed_tab():
         return False
 
 
+def _blank(url):
+    return url in ("", "about:blank") or url.startswith(("about:blank#", "chrome://newtab", "chrome://new-tab-page"))
+
+
 def new_tab(url="about:blank"):
-    if _recover_closed_tab() and url == "about:blank":
-        tid = _bh.current_tab()["targetId"]  # upstream new_tab("about:blank") would open another
+    sw = _groups_worker(wake=True, open_profile=True)
+    if not sw:  # no extension: upstream's tab, ungrouped
+        if _recover_closed_tab() and url == "about:blank":
+            return _bh.current_tab()["targetId"]  # upstream new_tab("about:blank") would open another
+        return _new_tab(url)
+    # CDP opens tabs only in the last used profile, so the tab comes from this
+    # profile's worker. The daemon's own blank tab is reused when it is here,
+    # and closed when it went to another profile.
+    _recover_closed_tab()
+    cur = _bh.current_tab()
+    here = _orig_cdp("Target.getTargetInfo", targetId=cur["targetId"])["targetInfo"]["browserContextId"] == sw["browserContextId"]
+    if _blank(cur["url"]) and here:
+        tid = cur["targetId"]
     else:
-        tid = _new_tab(url)
-    _group_tab(tid)
+        tid = _eval_in(sw, "bhOpenTab()")["targetId"]
+        switch_tab(tid)
+        if _blank(cur["url"]):
+            _orig_cdp("Target.closeTarget", targetId=cur["targetId"])
+    if url != "about:blank":
+        _bh.goto_url(url)
+    _group_tab(tid, sw)
     return tid
 
 

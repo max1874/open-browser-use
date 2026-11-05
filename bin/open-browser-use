@@ -3,7 +3,11 @@
 #
 #   open-browser-use [start]            start it unless it is running (the wrapper does this)
 #   open-browser-use restart [--force]  quit and relaunch it
+#   open-browser-use window PROFILE     open a window of a Chrome profile (agent_helpers.py does this)
 #   open-browser-use reap               clean up after ended sessions (../libexec/reap.py)
+#
+# PROFILE is a name from Chrome's profile menu ("Work"). A cold start opens the
+# one in OBU_PROFILE, set by the wrapper (docs/profiles.md), else the last used.
 #
 # One long-lived Chrome with its own data directory, listening on a fixed CDP
 # port. All agent sessions share it, so logins persist across sessions and the
@@ -28,10 +32,12 @@ REPO="$(dirname "$(dirname "$(realpath "$0")")")"
 EXTENSION="${OBU_EXTENSION:-$REPO/extension}"
 BH_PY="$HOME/.local/share/uv/tools/browser-harness/bin/python3"
 
+usage() { echo "usage: open-browser-use [start | restart [--force] | window PROFILE | reap]" >&2; exit 2; }
 case "${1:-start}" in
   start|restart) ;;
+  window) [ -n "${2:-}" ] || usage ;;
   reap) [ -x "$BH_PY" ] || exit 0; exec "$BH_PY" -I "$REPO/libexec/reap.py" ;;
-  *) echo "usage: open-browser-use [start | restart [--force] | reap]" >&2; exit 2 ;;
+  *) usage ;;
 esac
 
 # One launcher at a time: a supervisor that relaunches Chrome as soon as it
@@ -43,6 +49,32 @@ if [ -z "${OBU_LOCKED:-}" ]; then
 fi
 
 alive() { curl -sf -m 1 "$ENDPOINT" >/dev/null 2>&1; }
+
+# The directory of the Chrome profile with this name; without one, the last used.
+profile_dir() {
+  python3 -I - "$DATA/Local State" "${1:-}" <<'PY'
+import json, sys
+
+try:
+    profiles = json.load(open(sys.argv[1]))["profile"]
+except (OSError, KeyError, ValueError):
+    profiles = {}  # a new data directory
+cache, name = profiles.get("info_cache", {}), sys.argv[2]
+dirs = [d for d, p in cache.items() if p.get("name", "").lower() == name.lower()]
+if name and not dirs:
+    sys.exit(f'open-browser-use: there is no Chrome profile named "{name}"; there are: '
+             + ", ".join(p.get("name", d) for d, p in cache.items()))
+print(dirs[0] if name else profiles.get("last_used", "Default"))
+PY
+}
+
+# window PROFILE: on a running Chrome, which then comes to the front: neither
+# `open -g` nor any launch flag keeps it back (Chrome 156, 2026-11-05).
+if [ "$1" = "window" ]; then
+  alive || { echo "open-browser-use: the agent Chrome is not running" >&2; exit 1; }
+  dir=$(profile_dir "$2") || exit 1
+  exec open -g -n -a "${OBU_CHROME_APP:-Google Chrome}" --args --user-data-dir="$DATA" --profile-directory="$dir"
+fi
 
 # restart [--force]: e.g. to pick up launch flags. Every agent session shares
 # this browser, so closing it closes their tabs mid-task (2026-10-10 a restart
@@ -89,52 +121,51 @@ fi
 
 alive && exit 0
 
-# Which profile inside the data directory: the one last used, so a profile the
+# Which profile to open: the session's, else the last used, so a profile the
 # user switched to (2026-10-11: Default deleted, signed in as Profile 2) keeps
 # working. Naming it on the command line also skips the profile picker Chrome
-# shows at launch once there are several profiles.
-PROFILE="${OBU_CHROME_PROFILE:-$(python3 -I - "$DATA/Local State" <<'PY' 2>/dev/null
-import json, sys
-print(json.load(open(sys.argv[1]))["profile"]["last_used"])
-PY
-)}"
-PROFILE="${PROFILE:-Default}"
+# shows at launch once there are several profiles; it opens no other profile,
+# whatever Local State lists as last active (2026-11-05).
+PROFILE="${OBU_CHROME_PROFILE:-$(profile_dir "${OBU_PROFILE:-}" || profile_dir)}"
 
-# Profile prefs: vertical tabs, saved-groups bar hidden. Chrome rewrites
-# Preferences on exit, so they can only be set while it is down — i.e. here,
-# before every cold start, for whichever profile is about to open.
+# For every profile, while Chrome is down (it rewrites these files on exit):
+# vertical tabs and no saved-groups bar in Preferences, and a word if the
+# extension is missing, which Chrome records by folder in Secure Preferences.
 mkdir -p "$DATA/$PROFILE"
-python3 -I - "$DATA/$PROFILE/Preferences" <<'PY' || echo "open-browser-use: could not set profile prefs" >&2
+python3 -I - "$DATA" "$PROFILE" "$EXTENSION" <<'PY' || echo "open-browser-use: could not set profile prefs" >&2
 import json, os, sys
 
-path = sys.argv[1]
+data, launched, extension = sys.argv[1:]
 WANT = {
     ("vertical_tabs", "enabled"): True,
     ("bookmark_bar", "show_tab_groups"): False,
 }
-prefs = json.load(open(path)) if os.path.exists(path) else {}
-changed = False
-for keys, value in WANT.items():
-    node = prefs
-    for k in keys[:-1]:
-        node = node.setdefault(k, {})
-    if node.get(keys[-1]) != value:
-        node[keys[-1]] = value
-        changed = True
-if changed:
-    json.dump(prefs, open(path, "w"), separators=(",", ":"))
+try:
+    names = {d: p.get("name", d) for d, p in json.load(open(f"{data}/Local State"))["profile"]["info_cache"].items()}
+except (OSError, KeyError, ValueError):
+    names = {}
+names.setdefault(launched, launched)
+for d, name in names.items():
+    path = f"{data}/{d}/Preferences"
+    prefs = json.load(open(path)) if os.path.exists(path) else {}
+    changed = False
+    for keys, value in WANT.items():
+        node = prefs
+        for k in keys[:-1]:
+            node = node.setdefault(k, {})
+        if node.get(keys[-1]) != value:
+            node[keys[-1]] = value
+            changed = True
+    if changed:
+        json.dump(prefs, open(path, "w"), separators=(",", ":"))
+    try:
+        settings = json.load(open(f"{data}/{d}/Secure Preferences"))["extensions"]["settings"].values()
+    except (OSError, KeyError, ValueError):
+        settings = []
+    if not any(os.path.realpath(s.get("path", "")) == os.path.realpath(extension) for s in settings):
+        print(f'open-browser-use: the extension is not installed in the Chrome profile "{name}".\n'
+              f"  Once, in that profile: chrome://extensions → Developer mode → Load unpacked → {extension}", file=sys.stderr)
 PY
-
-# Chrome records an unpacked extension by its folder, in Secure Preferences.
-python3 -I - "$DATA/$PROFILE/Secure Preferences" "$EXTENSION" <<'PY' 2>/dev/null ||
-import json, os, sys
-
-settings = json.load(open(sys.argv[1]))["extensions"]["settings"]
-ext = os.path.realpath(sys.argv[2])
-sys.exit(not any(os.path.realpath(s.get("path", "")) == ext for s in settings.values()))
-PY
-  { echo "open-browser-use: the extension is not installed in this profile; tabs stay ungrouped." >&2
-    echo "  Once: chrome://extensions → Developer mode → Load unpacked → $EXTENSION" >&2; }
 
 open -g -n -a "${OBU_CHROME_APP:-Google Chrome}" --args \
   --user-data-dir="$DATA" \

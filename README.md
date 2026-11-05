@@ -15,11 +15,12 @@ Code, Codex and their sub-agents:
 | Background clicks silently do nothing | Focus emulation turns a hidden tab's input back on, so clicks and key presses land without raising Chrome |
 | You cannot tell whose tabs are whose | Every session's tabs share one named, coloured tab group: `🔑 Sign up for Tiingo` |
 | You cannot see what the agent is doing | A glowing pointer glides to each click before it lands |
+| Personal and company projects need different accounts on the same sites | Chrome profiles in the one agent Chrome, picked by the project folder, used side by side |
 | Ended sessions leave tabs and processes behind | A reaper reads the agents' own session records and closes what belongs to sessions that have ended |
 
 > Status: early. This is the public home of a setup that has run daily on one
-> Mac since August 2026, on Google Chrome. The packaging in this repository has
-> not yet been installed from scratch on another machine. See [todo.md](todo.md).
+> Mac since August 2026, on Google Chrome, and has been installed from scratch
+> on a second one. See [todo.md](todo.md).
 
 ## How it fits together
 
@@ -66,6 +67,20 @@ site once, for every later session:
 ```bash
 open -a "Google Chrome" --args --user-data-dir="$HOME/.local/share/open-browser-use/chrome"
 ```
+
+### Personal and work logins
+
+To keep two sets of accounts apart (a personal and a company Cloudflare, say),
+add a Chrome profile to the agent Chrome, install the extension and sign in
+there, and map project folders to profiles in
+`~/.config/open-browser-use/profiles.json`:
+
+```json
+{ "default": "Personal", "folders": { "~/Projects/Company": "Work" } }
+```
+
+Sessions in both run at the same time, each in its own profile's windows. See
+[docs/profiles.md](docs/profiles.md).
 
 ## What the agent calls
 

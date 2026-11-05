@@ -1,4 +1,7 @@
 // Called by agent_helpers.py over CDP (Runtime.evaluate on this worker):
+//   bhProfile() / bhSetProfile(name, targetId)  which agent profile this is (docs/profiles.md);
+//                                         targetId is the tab of the window opened to find out
+//   bhOpenTab()                           new_tab(): a background tab in this profile
 //   bhGroup(targetId, key, defaultTitle)  after every new_tab(): put the tab in its session's group
 //   bhNameSession(key, title)             name_session(): retitle the session's group
 //   bhMarkTab(targetId, status)           mark_tab(): "deliverable" / "handoff" keeps the tab open, null clears
@@ -10,15 +13,22 @@
 // is chrome.debugger.getTargets(), which lists both ids. It does not attach,
 // so no "is debugging this browser" bar appears.
 
-// Opening a tab wakes this worker, so agent_helpers.py finds it as a CDP
-// target right after Target.createTarget.
+// Every profile's worker must be reachable over CDP at any time. An idle
+// worker stops after 30 seconds, and one in a profile other than the last used
+// cannot be woken from CDP, which opens tabs only in that one. Any extension
+// API call resets the idle timer, so this one keeps it running (Chrome 156,
+// 2026-11-05: alive after 77 s idle, a worker without it gone). onStartup
+// starts it when its profile opens; onCreated lets agent_helpers.py wake an
+// older version of this worker by opening a tab.
+chrome.runtime.onStartup.addListener(() => {});
 chrome.tabs.onCreated.addListener(() => {});
+setInterval(() => chrome.runtime.getPlatformInfo(), 20e3);
 
 // agent_helpers.py checks this before calling in and runs chrome.runtime.reload()
 // on a mismatch: after a reload via CDP, Chrome can keep running the previous
 // worker script even though the manifest is new (seen 2026-10-10, Chrome 154).
 // Bump it with agent_helpers.py's _GROUPS_API whenever the functions change.
-self.bhApi = 8;
+self.bhApi = 9;
 
 const COLORS = ["blue", "red", "yellow", "green", "pink", "purple", "cyan", "orange"];
 
@@ -48,6 +58,40 @@ async function liveGroup(groupId) {
     return null;
   }
 }
+
+// The profile name ("Work"), given by agent_helpers.py when it opened a window
+// of this profile to find its worker; Chrome tells an extension nothing about
+// its profile. That window's tab is the next one bhOpenTab() hands out.
+self.bhProfile = async () => (await chrome.storage.local.get("profile")).profile || null;
+self.bhSetProfile = async (name, targetId) => {
+  await chrome.storage.local.set({ profile: name });
+  await chrome.storage.session.set({ spare: await tabIdOf(targetId) });
+  return { profile: name };
+};
+
+// A background tab in this profile: the spare one if it is still an empty
+// ungrouped tab, else a new one in its last focused window, or in a new
+// unfocused window when it has none. Returns its CDP target id.
+self.bhOpenTab = async () => {
+  const { spare } = await chrome.storage.session.get("spare");
+  await chrome.storage.session.remove("spare");
+  let tab = spare === undefined ? null : await chrome.tabs.get(spare).catch(() => null);
+  if (tab && (tab.groupId >= 0 || !/^(chrome:\/\/newtab|about:blank)/.test(tab.url || tab.pendingUrl))) tab = null;
+  if (!tab) {
+    try {
+      const win = await chrome.windows.getLastFocused({ windowTypes: ["normal"] });
+      tab = await chrome.tabs.create({ windowId: win.id, url: "about:blank", active: false });
+    } catch {
+      tab = (await chrome.windows.create({ url: "about:blank", focused: false })).tabs[0];
+    }
+  }
+  for (let i = 0; i < 40; i++) {
+    const target = (await chrome.debugger.getTargets()).find((t) => t.tabId === tab.id);
+    if (target) return { targetId: target.id };
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  return { error: "no target for the new tab" };
+};
 
 self.bhGroup = async (targetId, key, defaultTitle) => {
   const tabId = await tabIdOf(targetId);
