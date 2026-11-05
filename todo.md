@@ -23,25 +23,16 @@ puzzle piece. The previous icon was not ours to publish.
 change, and the publisher account showed "2 published, limit 2" on 2026-11-02;
 check that limit first.
 
-## Moving off the private predecessor
-
-Switched on the author's Mac on 2026-11-05: the commands, helpers and skill
-come from this repository. Still open, all needing an unlocked screen:
-
-- "Load unpacked" `extension/` in the running agent Chrome (the picker cannot
-  be scripted, docs/design.md), then delete the predecessor's CDP-loaded copy
-  (`dogdonim…`, identical worker), and confirm `bh-agent-chrome`'s Secure
-  Preferences check finds the new one.
-- Then hand the launchd keeper to its new home (a personal repository) with its
-  `install.sh`. Until then the old keeper still cold-starts Chrome with the
-  predecessor's launcher, which loads the old extension: the safe fallback.
-- Then archive the predecessor.
-
 ## Known gaps, no plan
 
 - **Chromium browsers other than Google Chrome.** `BH_AGENT_CHROME_APP` exists;
   none has been tried.
 - **Tabs a page opens by itself** are not grouped, so `close_session()` does not
   see them.
+- **Extensions that talk to a desktop app** (1Password, Codex) reach it through
+  a native messaging host, whose manifest apps register only in the everyday
+  Chrome's folder; in the agent Chrome they cannot connect until the manifest
+  is linked into its `NativeMessagingHosts/`. The author's setup does that by
+  hand; it is a general problem and may belong in `install.sh`.
 - **Sub-agents** inherit their parent's session id and share its tabs. Telling
   them apart needs an id the agent host does not export.
