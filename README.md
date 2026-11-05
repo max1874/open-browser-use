@@ -95,7 +95,7 @@ mark_tab("deliverable")                 # a result the user should look at: keep
 close_session()                         # close this session's tabs, except the marked ones
 ```
 
-The skill in [skill/browser-harness/SKILL.md](skill/browser-harness/SKILL.md)
+The `/open-browser-use` skill in [skill/open-browser-use/SKILL.md](skill/open-browser-use/SKILL.md)
 tells agents when to call each of these.
 
 ## Known limits

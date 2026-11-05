@@ -73,7 +73,9 @@ logins.
 so the tab comes from the worker: `bhOpenTab()` opens it in the background in
 the profile's last focused window, or in a new unfocused window. The daemon's
 own blank tab is reused when it is in the right profile and closed when it is
-not. Everything after that is unchanged.
+not. Everything after that is unchanged. `goto_url()` checks the same: when the
+session's tab is gone, the daemon's replacement lands in the last used profile,
+so a navigation there first moves to a tab of the right one.
 
 **Groups, marks, `close_session()`, the reaper**: per worker, as before; the
 reaper walks every profile's worker.

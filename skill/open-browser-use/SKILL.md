@@ -1,11 +1,12 @@
 ---
-name: browser-harness
-description: "Operate an interactive browser through browser-harness using local Chrome/CDP or an authorized remote browser. Use for clicks, forms, logged-in pages, or rendered content; plain public-page retrieval needs no browser."
+name: open-browser-use
+description: "Operate an interactive browser through browser-harness (the open-browser-use agent Chrome, or an authorized remote browser). Use for clicks, forms, logged-in pages, or rendered content; plain public-page retrieval needs no browser."
 ---
 
-# browser-harness
+# open-browser-use
 
-Direct control of a real Chrome over CDP, from Python heredocs.
+Direct control of a real Chrome over CDP, from Python heredocs passed to the
+`browser-harness` command.
 
 ## When not to use
 

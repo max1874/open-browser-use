@@ -51,10 +51,14 @@ echo "data collection: off"
 # SKILL.md is a symlink, silently (the directory itself may be one).
 for dir in ${OBU_SKILL_DIRS:-"$HOME/.claude/skills" "$HOME/.codex/skills"}; do
   [ -d "$dir" ] || continue
-  mkdir -p "$dir/browser-harness"
-  cp "$REPO/skill/browser-harness/SKILL.md" "$dir/browser-harness/SKILL.md"
-  ln -sfn "$BH_SRC/interaction-skills" "$dir/browser-harness/interaction-skills"
-  echo "skill: $dir/browser-harness"
+  mkdir -p "$dir/open-browser-use"
+  cp "$REPO/skill/open-browser-use/SKILL.md" "$dir/open-browser-use/SKILL.md"
+  ln -sfn "$BH_SRC/interaction-skills" "$dir/open-browser-use/interaction-skills"
+  echo "skill: $dir/open-browser-use"
+  # Until 2026-11-05 it was installed as browser-harness; remove that copy.
+  if grep -qs open-browser-use "$dir/browser-harness/SKILL.md" && [ ! -L "$dir/browser-harness" ]; then
+    rm -r "$dir/browser-harness" && echo "removed: $dir/browser-harness (renamed)"
+  fi
 done
 
 echo
