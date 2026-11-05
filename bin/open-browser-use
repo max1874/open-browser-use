@@ -73,6 +73,15 @@ PY
 if [ "$1" = "window" ]; then
   alive || { echo "open-browser-use: the agent Chrome is not running" >&2; exit 1; }
   dir=$(profile_dir "$2") || exit 1
+  # Without the extension the window is of no use to agent_helpers.py, and
+  # every retry would raise Chrome again.
+  python3 -I - "$DATA/$dir/Secure Preferences" "$EXTENSION" 2>/dev/null <<'PY' || { echo "open-browser-use: the extension is not installed in the Chrome profile \"$2\".
+  Once, in that profile: chrome://extensions → Developer mode → Load unpacked → $EXTENSION" >&2; exit 1; }
+import json, os, sys
+
+settings = json.load(open(sys.argv[1]))["extensions"]["settings"].values()
+sys.exit(not any(os.path.realpath(s.get("path", "")) == os.path.realpath(sys.argv[2]) for s in settings))
+PY
   exec open -g -n -a "${OBU_CHROME_APP:-Google Chrome}" --args --user-data-dir="$DATA" --profile-directory="$dir"
 fi
 

@@ -153,26 +153,30 @@ def reap_groups():
         if not found:
             print("reap: groups: extension not found", file=sys.stderr)
         for sw in found:
-            session = cdp("Target.attachToTarget", targetId=sw["targetId"], flatten=True)["sessionId"]
-
-            def ev(expr):
-                r = cdp("Runtime.evaluate", session, expression=expr, awaitPromise=True, returnByValue=True)
-                if "exceptionDetails" in r:
-                    raise RuntimeError(r["exceptionDetails"].get("text"))
-                return r["result"].get("value")
-
             try:
-                for key in ev("bhSessionKeys()") or []:
-                    if key == me:
-                        continue
-                    started = started_at(key)
-                    if not ended(key, started):
-                        continue
-                    r = ev(f"bhReapSession({json.dumps(key)}, {json.dumps(ended(key, started, DAY))})")
-                    if r and r.get("closed"):
-                        print(f"reap: {key}: closed {r['closed']} tab(s), kept {r['kept']}")
-            finally:
-                cdp("Target.detachFromTarget", sessionId=session)
+                session = cdp("Target.attachToTarget", targetId=sw["targetId"], flatten=True)["sessionId"]
+
+                def ev(expr):
+                    r = cdp("Runtime.evaluate", session, expression=expr, awaitPromise=True, returnByValue=True)
+                    if "exceptionDetails" in r:
+                        raise RuntimeError(r["exceptionDetails"].get("text"))
+                    return r["result"].get("value")
+
+                try:
+                    for key in ev("bhSessionKeys()") or []:
+                        if key == me:
+                            continue
+                        started = started_at(key)
+                        if not ended(key, started):
+                            continue
+                        r = ev(f"bhReapSession({json.dumps(key)}, {json.dumps(ended(key, started, DAY))})")
+                        if r and r.get("closed"):
+                            print(f"reap: {key}: closed {r['closed']} tab(s), kept {r['kept']}")
+                finally:
+                    cdp("Target.detachFromTarget", sessionId=session)
+            except Exception as e:  # one profile's trouble must not stop the others
+                print(f"reap: groups: {sw['browserContextId'][:8]}: {e}", file=sys.stderr)
+
 
 try:
     reap_groups()

@@ -157,28 +157,39 @@ def _current(sw):
 def _open_profile():
     """Open a window of this session's Chrome profile, which also starts it, and
     name its worker, which hands out the window's tab next. Chrome comes to the
-    front: no way to open a profile in the background was found (docs/profiles.md)."""
+    front: no way to open a profile in the background was found (docs/profiles.md).
+
+    The window is recognised by its New Tab Page: tabs that sessions open are
+    about:blank, and naming the wrong profile's worker would stick."""
     before = {t["targetId"] for t in _orig_cdp("Target.getTargets")["targetInfos"]}
-    subprocess.run([_OBU, "window", _PROFILE], check=True)
+    r = subprocess.run([_OBU, "window", _PROFILE], capture_output=True, text=True)
+    if r.returncode:  # e.g. no such profile, or it lacks the extension: says how to fix it
+        raise RuntimeError(r.stderr.strip())
     for _ in range(100):
         time.sleep(0.1)
         infos = _orig_cdp("Target.getTargets")["targetInfos"]
-        tab = next((t for t in infos if t["type"] == "page" and t["targetId"] not in before), None)
+        tab = next((t for t in infos if t["type"] == "page" and t["targetId"] not in before
+                    and t["url"].startswith(("chrome://newtab", "chrome://new-tab-page"))), None)
         sw = tab and next((t for t in infos if t["type"] == "service_worker" and t["url"].endswith(_GROUPS_SW)
                            and t["browserContextId"] == tab["browserContextId"]), None)
-        if sw and (sw := _current(sw)):
-            _eval_in(sw, f"bhSetProfile({json.dumps(_PROFILE)}, {json.dumps(tab['targetId'])})")
-            return sw
-    raise RuntimeError(f'the Open Browser Use extension is not running in the Chrome profile "{_PROFILE}": '
-                       "chrome://extensions → Developer mode → Load unpacked → the extension/ folder")
+        if sw:
+            sw = _current(sw)
+            if sw:
+                _eval_in(sw, f"bhSetProfile({json.dumps(_PROFILE)}, {json.dumps(tab['targetId'])})")
+                return sw
+            break
+    raise RuntimeError(f'the Open Browser Use extension did not start in the Chrome profile "{_PROFILE}"')
 
 
 def _groups_worker(wake=False, open_profile=False):
     """The extension's worker in this session's profile; None if there is none."""
     for sw in _wait_groups_workers(wake):
-        sw = _current(sw)
-        if sw and (not _PROFILE or _eval_in(sw, "bhProfile()") == _PROFILE):
-            return sw
+        try:  # a worker can go away under us, e.g. with its profile's last window
+            sw = _current(sw)
+            if sw and (not _PROFILE or (_eval_in(sw, "bhProfile()") or "").lower() == _PROFILE.lower()):
+                return sw
+        except Exception:
+            continue
     return _open_profile() if _PROFILE and open_profile else None
 
 
@@ -245,32 +256,63 @@ def _blank(url):
     return url in ("", "about:blank") or url.startswith(("about:blank#", "chrome://newtab", "chrome://new-tab-page"))
 
 
+def _context(target_id):
+    return _orig_cdp("Target.getTargetInfo", targetId=target_id)["targetInfo"]["browserContextId"]
+
+
+def _upstream_new_tab(url):
+    """upstream's tab, which CDP opens in the last used profile: fine without profiles."""
+    if _recover_closed_tab() and url == "about:blank":
+        return _bh.current_tab()["targetId"]  # upstream new_tab("about:blank") would open another
+    return _new_tab(url)
+
+
 def new_tab(url="about:blank"):
     sw = _groups_worker(wake=True, open_profile=True)
-    if not sw:  # no extension: upstream's tab, ungrouped
-        if _recover_closed_tab() and url == "about:blank":
-            return _bh.current_tab()["targetId"]  # upstream new_tab("about:blank") would open another
-        return _new_tab(url)
+    if not sw:  # no extension: ungrouped
+        return _upstream_new_tab(url)
     # CDP opens tabs only in the last used profile, so the tab comes from this
     # profile's worker. The daemon's own blank tab is reused when it is here,
     # and closed when it went to another profile.
     _recover_closed_tab()
     cur = _bh.current_tab()
-    here = _orig_cdp("Target.getTargetInfo", targetId=cur["targetId"])["targetInfo"]["browserContextId"] == sw["browserContextId"]
-    if _blank(cur["url"]) and here:
+    if _blank(cur["url"]) and _context(cur["targetId"]) == sw["browserContextId"]:
         tid = cur["targetId"]
     else:
-        tid = _eval_in(sw, "bhOpenTab()")["targetId"]
+        opened = _eval_in(sw, "bhOpenTab()") or {}
+        if "targetId" not in opened:
+            if _PROFILE:
+                raise RuntimeError(f'could not open a tab in the Chrome profile "{_PROFILE}": {opened.get("error")}')
+            return _upstream_new_tab(url)
+        tid = opened["targetId"]
         switch_tab(tid)
-        if _blank(cur["url"]):
+        # A named daemon's own tab is about:blank; anything else may be the user's.
+        if cur["url"] == "about:blank" and os.environ.get("BU_NAME"):
             _orig_cdp("Target.closeTarget", targetId=cur["targetId"])
     if url != "about:blank":
-        _bh.goto_url(url)
+        _goto_url(url)
     _group_tab(tid, sw)
     return tid
 
 
 new_tab.__doc__ = _new_tab.__doc__
+
+_goto_url = _bh.goto_url
+
+
+def goto_url(url):
+    if _PROFILE:
+        # When its tab is gone the daemon opens a replacement, and CDP puts it
+        # in the last used profile: navigate there and this session would be
+        # on the other profile's logins.
+        _recover_closed_tab()
+        sw = _groups_worker()
+        if not sw or _context(_bh.current_tab()["targetId"]) != sw["browserContextId"]:
+            new_tab()
+    return _goto_url(url)
+
+
+goto_url.__doc__ = _goto_url.__doc__
 
 
 # --- Codex-style cursor --------------------------------------------------------

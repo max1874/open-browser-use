@@ -63,9 +63,10 @@ async function liveGroup(groupId) {
 // of this profile to find its worker; Chrome tells an extension nothing about
 // its profile. That window's tab is the next one bhOpenTab() hands out.
 self.bhProfile = async () => (await chrome.storage.local.get("profile")).profile || null;
+let spare; // that tab's id; the worker keeps itself running (above), so it is not lost
 self.bhSetProfile = async (name, targetId) => {
   await chrome.storage.local.set({ profile: name });
-  await chrome.storage.session.set({ spare: await tabIdOf(targetId) });
+  spare = await tabIdOf(targetId);
   return { profile: name };
 };
 
@@ -73,9 +74,9 @@ self.bhSetProfile = async (name, targetId) => {
 // ungrouped tab, else a new one in its last focused window, or in a new
 // unfocused window when it has none. Returns its CDP target id.
 self.bhOpenTab = async () => {
-  const { spare } = await chrome.storage.session.get("spare");
-  await chrome.storage.session.remove("spare");
-  let tab = spare === undefined ? null : await chrome.tabs.get(spare).catch(() => null);
+  const id = spare; // taken before any await, so two sessions never get the same tab
+  spare = undefined;
+  let tab = id === undefined ? null : await chrome.tabs.get(id).catch(() => null);
   if (tab && (tab.groupId >= 0 || !/^(chrome:\/\/newtab|about:blank)/.test(tab.url || tab.pendingUrl))) tab = null;
   if (!tab) {
     try {

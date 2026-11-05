@@ -29,26 +29,6 @@ if [ -z "${BU_NAME:-}" ]; then
   unset _pfx _sid
 fi
 
-# --- 1b. Chrome profile ---------------------------------------------------------
-# Which Chrome profile's logins this session uses: the deepest folder in
-# profiles.json containing the working directory, else its default
-# (docs/profiles.md). Sub-agents inherit both the directory and OBU_PROFILE.
-_CONF="${XDG_CONFIG_HOME:-$HOME/.config}/open-browser-use/profiles.json"
-if [ -z "${OBU_PROFILE:-}" ] && [ -f "$_CONF" ]; then
-  OBU_PROFILE=$(python3 -I - "$_CONF" <<'PY'
-import json, os, sys
-
-conf = json.load(open(sys.argv[1]))
-cwd = os.path.realpath(os.getcwd())
-folders = {os.path.realpath(os.path.expanduser(f)): p for f, p in conf.get("folders", {}).items()}
-inside = [f for f in folders if cwd == f or cwd.startswith(f + os.sep)]
-print(folders[max(inside, key=len)] if inside else conf.get("default", ""))
-PY
-  )
-  [ -n "$OBU_PROFILE" ] && export OBU_PROFILE
-fi
-unset _CONF
-
 # --- 2. agent-dedicated Chrome --------------------------------------------
 # Skipped for subcommands that never touch a browser, and when the caller has
 # already pinned an endpoint (BU_CDP_URL / BU_CDP_WS) or a cloud browser.
@@ -59,6 +39,31 @@ esac
 if [ -z "$_skip_chrome" ] &&
    [ -z "${BU_CDP_URL:-}" ] && [ -z "${BU_CDP_WS:-}" ] && [ -z "${BU_BROWSER_ID:-}" ] &&
    [ -z "${OBU_USE_DEFAULT_CHROME:-}" ]; then
+  # Which Chrome profile's logins this session uses: the deepest folder in
+  # profiles.json containing the working directory, else its default
+  # (docs/profiles.md). A cold start opens it. Sub-agents work in the same
+  # folder, so they get the same profile; setting OBU_PROFILE overrides it.
+  _CONF="${XDG_CONFIG_HOME:-$HOME/.config}/open-browser-use/profiles.json"
+  if [ -z "${OBU_PROFILE:-}" ] && [ -f "$_CONF" ]; then
+    # A broken file stops here: guessing a profile would mean the wrong logins.
+    OBU_PROFILE=$(python3 -I - "$_CONF" <<'PY'
+import json, os, sys
+
+try:
+    conf = json.load(open(sys.argv[1]))
+    folders = {os.path.realpath(os.path.expanduser(f)): p for f, p in conf.get("folders", {}).items()}
+    cwd = os.path.realpath(os.getcwd())
+    inside = [f for f in folders if cwd == f or cwd.startswith(f + os.sep)]
+    profile = folders[max(inside, key=len)] if inside else conf["default"]
+    assert isinstance(profile, str) and profile
+except Exception as e:
+    sys.exit(f"browser-harness: {sys.argv[1]}: no profile for {os.getcwd()} ({type(e).__name__}: {e})")
+print(profile)
+PY
+    ) || exit 1
+    export OBU_PROFILE
+  fi
+  unset _CONF
   if "$OBU" start; then
     BU_CDP_URL="$AGENT_CDP_URL"
     export BU_CDP_URL
@@ -68,6 +73,8 @@ if [ -z "$_skip_chrome" ] &&
   fi
 fi
 unset _skip_chrome
+# Profiles belong to the agent Chrome; another browser has none of its workers.
+[ "${BU_CDP_URL:-}" = "$AGENT_CDP_URL" ] || unset OBU_PROFILE
 
 # --- 3. focus-patch guard --------------------------------------------------
 # agent_helpers.py is a symlink into this repo. helpers._load_agent_helpers()
