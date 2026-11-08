@@ -91,7 +91,7 @@ del _name, _fn
 
 
 _GROUPS_SW = "/bh_session_groups_sw.js"
-_GROUPS_API = 9  # must match self.bhApi in extension/bh_session_groups_sw.js
+_GROUPS_API = 10  # must match self.bhApi in extension/bh_session_groups_sw.js
 _PROFILE = os.environ.get("OBU_PROFILE")  # set by bin/browser-harness from profiles.json
 _OBU = os.path.join(os.path.dirname(os.path.realpath(__file__)), "bin", "open-browser-use")
 

@@ -28,7 +28,7 @@ setInterval(() => chrome.runtime.getPlatformInfo(), 20e3);
 // on a mismatch: after a reload via CDP, Chrome can keep running the previous
 // worker script even though the manifest is new (seen 2026-10-10, Chrome 154).
 // Bump it with agent_helpers.py's _GROUPS_API whenever the functions change.
-self.bhApi = 9;
+self.bhApi = 10;
 
 const COLORS = ["blue", "red", "yellow", "green", "pink", "purple", "cyan", "orange"];
 
@@ -157,7 +157,9 @@ self.bhCloseSession = async (key) => {
   const tabs = await chrome.tabs.query({ groupId: group.id });
   const marked = await statuses();
   const close = tabs.filter((t) => !marked[t.id]).map((t) => t.id);
-  if (close.length) await chrome.tabs.remove(close);
+  // Not awaited: closing a profile's last window ends this worker before it
+  // could answer (2026-11-08).
+  if (close.length) chrome.tabs.remove(close).catch(() => {});
   return { closed: close.length, kept: tabs.length - close.length };
 };
 
