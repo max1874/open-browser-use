@@ -3,7 +3,7 @@
 README's "Known limits" says what this cannot do today. This file says what is
 meant to move and what each item is blocked on. Nothing here is scheduled.
 
-## Before the repository goes public
+## Still missing since going public (2026-11-09)
 
 **README screenshots.** `install.sh` on a clean account of a second Mac
 (Chrome 156, 2026-11-04) gave grouped tabs, a drawn pointer and trusted
