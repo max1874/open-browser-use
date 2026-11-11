@@ -4,10 +4,31 @@ Three constraints decide everything else:
 
 1. **Never touch the user's browser.** Agents get their own Chrome: its own
    `--user-data-dir`, its own CDP port (9333), its own process.
-2. **Never take the user's screen.** Chrome is started with `open -g`, tabs are
-   attached without being selected, and nothing calls `activate_tab()` on its own.
+2. **Never take the user's screen.** Chrome is started with `open -g` and no
+   window (below), tabs are attached without being selected, and nothing calls
+   `activate_tab()` on its own.
 3. **Keep logins across sessions.** The profile lives in a fixed directory
    (`~/.local/share/open-browser-use/chrome`) and the browser stays up between sessions.
+
+## Starting without taking the front
+
+`open -g` does not keep Chrome in the background: Chrome activates itself when
+it opens a window while it has none. Measured on Chrome 157, 2026-11-11, by
+sampling the frontmost app every 0.1 s:
+
+| Window opened by | Chrome in front |
+|---|---|
+| the startup window, `open -g` | 1.5–2 s |
+| the startup window, `open -g -j` (hidden) | 0.5 s |
+| `Target.createTarget`, no window yet, even `newWindow` + `background` | 1.5 s |
+| the extension, `chrome.windows.create({focused: false})` | never |
+| a background tab when a window exists | never |
+
+So `open-browser-use start` launches with `--no-startup-window` and has the
+extension's worker, which runs without a window, open the first one unfocused
+before any daemon asks CDP for a tab. It does the same when Chrome is up but the
+user has closed every window. Without the extension the daemon's first tab
+still raises Chrome once.
 
 ## The wrapper keeps the upstream name
 

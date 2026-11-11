@@ -104,7 +104,11 @@ tells agents when to call each of these.
   DevTools Protocol, and the tab groups use `chrome.tabGroups`. Firefox dropped
   CDP; Safari never had it. `OBU_CHROME_APP` can name Edge, Brave or
   Chromium, but only Google Chrome has been tested.
-- **macOS only.** The launcher uses `open -g` to start Chrome without raising it.
+- **macOS only.** The launcher starts Chrome with `open -g` and no window, and
+  the extension opens the first one unfocused, so Chrome never comes to the
+  front ([design](docs/design.md#starting-without-taking-the-front)).
+- **Opening a second profile raises Chrome**, once per profile after each
+  Chrome start ([profiles](docs/profiles.md)).
 - **Codex's sandbox cannot launch Chrome.** It blocks LaunchServices, so `open`
   fails inside it. Start the agent Chrome once from a normal terminal
   (`open-browser-use start`); after that Codex connects normally.

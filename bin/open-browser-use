@@ -14,8 +14,8 @@
 # user's everyday Chrome is never touched. OBU_CHROME_APP names another
 # Chromium-family app; only Google Chrome has been tested.
 #
-# Launched with `open -g` (do not bring the app to the foreground) so starting
-# it never steals focus from whatever the user is doing. A non-default
+# Launched with `open -g` and no window (ensure_window below) so starting it
+# never steals focus from whatever the user is doing. A non-default
 # user-data-dir also sidesteps Chrome 144's per-connection "Allow remote
 # debugging?" sheet (see daemon.py:216-219).
 #
@@ -49,6 +49,41 @@ if [ -z "${OBU_LOCKED:-}" ]; then
 fi
 
 alive() { curl -sf -m 1 "$ENDPOINT" >/dev/null 2>&1; }
+
+# A Chrome without a window takes the front when it opens one, despite `open -g`
+# at launch, and for the first tab CDP opens later (Chrome 157, 2026-11-11). The
+# extension's windows.create({focused: false}) does not, so a cold start opens
+# no window and this opens the first one, before any daemon asks CDP for a tab.
+# TRIES tenths of a second to wait for the extension's worker; without one the
+# daemon's first tab still raises Chrome.
+ensure_window() {
+  curl -sf -m 1 "http://127.0.0.1:$PORT/json/list" | grep -q '"type": "page"' && return
+  "$BH_PY" -I - "$ENDPOINT" "$1" <<'PY' || echo "open-browser-use: no extension to open a window in the background; Chrome may come to the front" >&2
+import asyncio, json, sys, urllib.request, websockets
+
+async def main(endpoint, tries):
+    async with websockets.connect(json.load(urllib.request.urlopen(endpoint))["webSocketDebuggerUrl"]) as ws:
+        async def cdp(method, session=None, **params):
+            msg = {"id": cdp.n, "method": method, "params": params, **({"sessionId": session} if session else {})}
+            cdp.n += 1
+            await ws.send(json.dumps(msg))
+            while (r := json.loads(await ws.recv())).get("id") != msg["id"]:
+                pass
+            return r["result"]
+        cdp.n = 1
+        for _ in range(tries):
+            infos = (await cdp("Target.getTargets"))["targetInfos"]
+            sw = next((t for t in infos if t["type"] == "service_worker" and t["url"].endswith("/bh_session_groups_sw.js")), None)
+            if sw:
+                session = (await cdp("Target.attachToTarget", targetId=sw["targetId"], flatten=True))["sessionId"]
+                await cdp("Runtime.evaluate", session, expression="chrome.windows.create({focused: false})", awaitPromise=True)
+                return
+            await asyncio.sleep(0.1)
+        sys.exit(1)
+
+asyncio.run(main(sys.argv[1], int(sys.argv[2])))
+PY
+}
 
 # The directory of the Chrome profile with this name; without one, the last used.
 profile_dir() {
@@ -128,7 +163,8 @@ PY
   fi
 fi
 
-alive && exit 0
+# The user may have closed every window; Chrome keeps running without one.
+alive && { ensure_window 1; exit 0; }
 
 # Which profile to open: the session's, else the last used, so a profile the
 # user switched to (2026-10-11: Default deleted, signed in as Profile 2) keeps
@@ -182,11 +218,12 @@ open -g -n -a "${OBU_CHROME_APP:-Google Chrome}" --args \
   --remote-debugging-port="$PORT" \
   --no-first-run \
   --no-default-browser-check \
-  --disable-features=ChromeWhatsNewUI
+  --disable-features=ChromeWhatsNewUI \
+  --no-startup-window
 
 i=0
 while [ "$i" -lt 60 ]; do
-  alive && exit 0
+  alive && { ensure_window 50; exit 0; }
   sleep 0.5
   i=$((i + 1))
 done
