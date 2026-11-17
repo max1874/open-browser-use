@@ -114,11 +114,11 @@ tells agents when to call each of these.
   (`open-browser-use start`); after that Codex connects normally.
 - **Sub-agents share their parent's session id**, so they share its tabs. Give
   each browser sub-agent its own `BU_NAME`.
-- **Pages can still open tabs in front through `window.open()`.** A link the
-  agent clicks or presses Enter on that would open a new tab opens in the
-  background in the session's group instead
-  ([design](docs/design.md#links-that-open-a-tab)); a script's `window.open()`
-  is left alone, so that tab is in front, ungrouped, and raises Chrome.
+- **Pages can still open tabs in front through `window.open()` or a POST
+  form.** A link or GET form the agent clicks or presses Enter on that would
+  open a new tab opens in the background in the session's group instead
+  ([design](docs/design.md#links-and-forms-that-open-a-tab)); the other two
+  are left alone, so their tab is in front, ungrouped, and raises Chrome.
 
 ## Credits
 

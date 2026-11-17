@@ -19,7 +19,8 @@ Verified 2026-08-24 on Chrome 151:
   hidden tab, emulation on → click ["trusted=true"] , press_key 'Q'
 
 The flag is per CDP session, so it is re-armed whenever the daemon attaches to
-a different target (new_tab / switch_tab / ensure_real_tab).
+a different target (new_tab / switch_tab / ensure_real_tab), and before the
+agent's input when the page reads hidden (the daemon also re-attaches silently).
 
 Session tab groups
 ------------------
@@ -316,30 +317,55 @@ def goto_url(url):
 goto_url.__doc__ = _goto_url.__doc__
 
 
-# --- Links that open a tab -----------------------------------------------------
+# --- The agent's own input ----------------------------------------------------
 
-# A target=_blank link the agent clicks opens in front and raises Chrome
-# (2026-11-17), and nothing can stop that once the page has asked. So for the
-# length of the agent's click or key press, the page leaves such links to us
-# and they open as background tabs in the session's group (docs/design.md).
-_LINK_GUARD = r"""(() => {
-  if (window.__obuLinks) return;
-  const g = window.__obuLinks = {links: [], on(e) {
-    if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
-    const a = e.composedPath().find((n) => n.localName === "a" || n.localName === "area");
-    if (!a || !a.href || a.hasAttribute("download") || /\bopener\b/i.test(a.rel)) return;
-    const t = a.getAttribute("target") ?? document.querySelector("base[target]")?.target ?? "";
-    if (["", "_self", "_parent", "_top"].includes(t.toLowerCase())) return;
-    if (document.querySelector(`iframe[name="${CSS.escape(t)}"], frame[name="${CSS.escape(t)}"]`)) return;
-    e.preventDefault();
-    g.links.push({url: a.href, referrer: /\bnoreferrer\b/i.test(a.rel) ? "" : location.href});
-  }};
-  addEventListener("click", g.on);
+# Two things are checked around each click, key press and scroll, in one page
+# evaluation before the input:
+#
+# - Focus emulation. The daemon re-attaches silently when its tab closes
+#   (close_session(), the reaper, the user), and the new CDP session starts
+#   without it: after close_session() and new_tab(), every click did nothing
+#   (2026-11-17). A hidden page is re-armed here.
+# - Pages opening a tab. A target=_blank link or GET form opens its tab in
+#   front and raises Chrome (2026-11-17, a Taobao link), and nothing stops that
+#   once the page has asked. For the length of the input the page leaves them
+#   to us, and they open as background tabs in the session's group
+#   (docs/design.md). POST forms and window.open() are left alone.
+_INPUT_GUARD = r"""(() => {
+  if (!window.__obuLinks) {
+    const newContext = (t) => !["", "_self", "_parent", "_top"].includes(t.toLowerCase())
+      && !document.querySelector(`iframe[name="${CSS.escape(t)}"], frame[name="${CSS.escape(t)}"]`);
+    const baseTarget = () => document.querySelector("base[target]")?.target ?? "";
+    const g = window.__obuLinks = {links: []};
+    const take = (e, url, rel) => {
+      e.preventDefault();
+      g.links.push({url, referrer: /\bnoreferrer\b/i.test(rel) ? "" : location.href});
+    };
+    g.click = (e) => {
+      if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+      const a = e.composedPath().find((n) => n.localName === "a" || n.localName === "area");
+      if (!a || !a.href || a.hasAttribute("download") || /\bopener\b/i.test(a.rel)) return;
+      if (newContext(a.getAttribute("target") ?? baseTarget())) take(e, a.href, a.rel);
+    };
+    g.submit = (e) => {
+      const f = e.target, s = e.submitter, rel = f.getAttribute("rel") || "";
+      if (e.defaultPrevented || /\bopener\b/i.test(rel)) return;
+      if ((s?.getAttribute("formmethod") ?? f.method).toLowerCase() !== "get") return;
+      if (!newContext(s?.getAttribute("formtarget") ?? f.getAttribute("target") ?? baseTarget())) return;
+      const url = new URL(s?.hasAttribute("formaction") ? s.formAction : f.action);
+      try { url.search = new URLSearchParams(new FormData(f, s)); } catch { return; }
+      take(e, url.href, rel);
+    };
+    addEventListener("click", g.click);
+    addEventListener("submit", g.submit);
+  }
+  return document.visibilityState;
 })()"""
-_LINK_TAKE = """(() => {
+_INPUT_TAKE = """(() => {
   const g = window.__obuLinks;
   if (!g) return [];
-  removeEventListener("click", g.on);
+  removeEventListener("click", g.click);
+  removeEventListener("submit", g.submit);
   delete window.__obuLinks;
   return g.links;
 })()"""
@@ -361,18 +387,20 @@ def _open_in_background(url, referrer):
     return tid
 
 
-def _links_in_background(fn):
+def _agent_input(fn):
     @functools.wraps(fn)
     def wrapper(*args, **kwargs):
         try:
-            _orig_cdp("Runtime.evaluate", expression=_LINK_GUARD)
+            r = _orig_cdp("Runtime.evaluate", expression=_INPUT_GUARD, returnByValue=True)
+            if r["result"].get("value") == "hidden":
+                _orig_cdp("Emulation.setFocusEmulationEnabled", enabled=True)
         except Exception:
             return fn(*args, **kwargs)
         try:
             return fn(*args, **kwargs)
         finally:
             try:
-                links = _orig_cdp("Runtime.evaluate", expression=_LINK_TAKE, returnByValue=True)["result"]["value"]
+                links = _orig_cdp("Runtime.evaluate", expression=_INPUT_TAKE, returnByValue=True)["result"]["value"]
             except Exception:
                 links = []  # the input navigated this tab away, guard and all
             for link in links:
@@ -382,7 +410,7 @@ def _links_in_background(fn):
     return wrapper
 
 
-press_key = _links_in_background(_bh.press_key)
+press_key = _agent_input(_bh.press_key)
 
 
 # --- Codex-style cursor --------------------------------------------------------
@@ -420,8 +448,8 @@ def _set_cursor_hidden(hidden):
         pass
 
 
-_click_at_xy = _links_in_background(_bh.click_at_xy)
-_scroll = _bh.scroll
+_click_at_xy = _agent_input(_bh.click_at_xy)
+_scroll = _agent_input(_bh.scroll)
 _capture_screenshot = _bh.capture_screenshot
 
 

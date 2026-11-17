@@ -73,6 +73,14 @@ exist yet when the helpers load), and disarms after `new_tab()`, `switch_tab()`
 and `ensure_real_tab()`, because attaching to another target starts a new CDP
 session and the setting belongs to the session.
 
+The daemon also attaches on its own: when its tab closes (`close_session()`,
+the reaper, the user), its next call finds the session stale and moves to a
+replacement tab, and the helpers are not told. After `close_session()` and
+`new_tab()` the page read `hidden` and every click did nothing (Chrome 157,
+2026-11-17). So `click_at_xy()`, `press_key()` and `scroll()` read
+`visibilityState` before the input, in the same evaluation as the guard below,
+and re-arm when it is `hidden`.
+
 Two traps found while testing this:
 
 - **A broken helpers symlink disables the patch silently**: browser-harness
@@ -116,7 +124,7 @@ Details that cost a debugging session each:
   cold start and says so when the extension is missing.
 - **Group colour** is a hash of `BU_NAME`, so a session keeps its colour.
 
-## Links that open a tab
+## Links and forms that open a tab
 
 A `target="_blank"` link clicked by the agent opens its tab in front, and Chrome
 activates the window for it, which raises the agent Chrome over the user's
@@ -124,23 +132,36 @@ work. It happened on 2026-11-17 with a Taobao link: the new page became the
 selected tab. Once the page has asked for the tab, neither CDP nor the
 extension can stop the activation; `chrome.tabs.onCreated` comes after it.
 
-So `click_at_xy()` and `press_key()` put a one-shot `click` listener on the
-page for the length of the input. A click on a link that would open a new
-browsing context, which no page handler has already taken (`defaultPrevented`),
-is cancelled and opened by the helpers instead: a background tab from the
+So `click_at_xy()`, `press_key()` and `scroll()` put one-shot `click` and
+`submit` listeners on the page for the length of the input. A link, or a GET
+form (its `target`, or the submit button's `formtarget`), that would open a new
+browsing context and that no page handler has already taken
+(`defaultPrevented`) is cancelled and opened by the helpers instead, a form as
+its action URL with the fields as the query: a background tab from the
 extension (`bhOpenTab`), navigated with the referrer a click would have sent
 (`strict-origin-when-cross-origin`, none for `rel=noreferrer`), and grouped
 with the session. The daemon stays on the page that was clicked, as it did
 before, and the call prints the new tab's target id for `switch_tab()`.
-Measured on Chrome 157, 2026-11-17, sampling the frontmost app every 0.1 s: the
-click and an Enter on the focused link each gave an inactive tab in the
-session's group with `document.referrer` set, and the agent Chrome never came
-to the front.
+Measured on Chrome 157, 2026-11-17, sampling the frontmost app every 0.1 s: a
+click on the link, an Enter on it, a click on a GET form's submit button and an
+Enter in its field each gave an inactive tab in the session's group with
+`document.referrer` set, and the agent Chrome never came to the front. Without
+the guard the form raised Chrome, as do `window.open()` from a click handler
+and a popup window.
 
-Left alone: links with `rel=opener` or `download`, targets naming a frame on
-the page, clicks inside cross-origin iframes (the listener is on the top page),
-`el.click()` from `js()`, and `window.open()`, whose caller may use the window
-it returns.
+Left alone, so still in front: POST forms (`Page.navigate` cannot carry their
+body), `window.open()`, whose caller may use the window it returns, and clicks
+inside cross-origin iframes (the listeners are on the top page). Also left
+alone: links with `rel=opener` or `download`, and targets naming a frame on the
+page. `el.click()` from `js()` on such a link opens nothing at all: without a
+user gesture the popup blocker takes it.
+
+The same run checked what else a click can start: a file chooser,
+`showOpenFilePicker()`, fullscreen, print, `alert()`, WebAuthn, notification
+and location prompts, an external protocol, a download, picture-in-picture,
+`window.focus()` and Cmd+N / Cmd+T key events. None brought the unfocused agent
+Chrome to the front. `print()` and `alert()` do block the page, so later
+`js()` calls time out until the dialog is gone.
 
 ## The pointer
 
