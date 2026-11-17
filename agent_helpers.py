@@ -40,6 +40,7 @@ OBU_CURSOR=0 turns the cursor off. mark_tab() marks a tab as "deliverable" or
 done, keeping the marked ones.
 """
 
+import functools
 import json
 import os
 import subprocess
@@ -315,6 +316,75 @@ def goto_url(url):
 goto_url.__doc__ = _goto_url.__doc__
 
 
+# --- Links that open a tab -----------------------------------------------------
+
+# A target=_blank link the agent clicks opens in front and raises Chrome
+# (2026-11-17), and nothing can stop that once the page has asked. So for the
+# length of the agent's click or key press, the page leaves such links to us
+# and they open as background tabs in the session's group (docs/design.md).
+_LINK_GUARD = r"""(() => {
+  if (window.__obuLinks) return;
+  const g = window.__obuLinks = {links: [], on(e) {
+    if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+    const a = e.composedPath().find((n) => n.localName === "a" || n.localName === "area");
+    if (!a || !a.href || a.hasAttribute("download") || /\bopener\b/i.test(a.rel)) return;
+    const t = a.getAttribute("target") ?? document.querySelector("base[target]")?.target ?? "";
+    if (["", "_self", "_parent", "_top"].includes(t.toLowerCase())) return;
+    if (document.querySelector(`iframe[name="${CSS.escape(t)}"], frame[name="${CSS.escape(t)}"]`)) return;
+    e.preventDefault();
+    g.links.push({url: a.href, referrer: /\bnoreferrer\b/i.test(a.rel) ? "" : location.href});
+  }};
+  addEventListener("click", g.on);
+})()"""
+_LINK_TAKE = """(() => {
+  const g = window.__obuLinks;
+  if (!g) return [];
+  removeEventListener("click", g.on);
+  delete window.__obuLinks;
+  return g.links;
+})()"""
+
+
+def _open_in_background(url, referrer):
+    """A background tab of this session's profile and group; the daemon stays where it is."""
+    sw = _groups_worker(wake=True)
+    tid = ((sw and _eval_in(sw, "bhOpenTab()")) or {}).get("targetId")
+    if not tid:
+        return _orig_cdp("Target.createTarget", url=url, background=True)["targetId"]
+    sid = _orig_cdp("Target.attachToTarget", targetId=tid, flatten=True)["sessionId"]
+    try:  # the referrer a real click would have sent
+        _orig_cdp("Page.navigate", session_id=sid, url=url, referrer=referrer,
+                  referrerPolicy="strictOriginWhenCrossOrigin")
+    finally:
+        _orig_cdp("Target.detachFromTarget", sessionId=sid)
+    _group_tab(tid, sw)
+    return tid
+
+
+def _links_in_background(fn):
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        try:
+            _orig_cdp("Runtime.evaluate", expression=_LINK_GUARD)
+        except Exception:
+            return fn(*args, **kwargs)
+        try:
+            return fn(*args, **kwargs)
+        finally:
+            try:
+                links = _orig_cdp("Runtime.evaluate", expression=_LINK_TAKE, returnByValue=True)["result"]["value"]
+            except Exception:
+                links = []  # the input navigated this tab away, guard and all
+            for link in links:
+                tid = _open_in_background(link["url"], link["referrer"])
+                print(f"opened in a background tab, switch_tab({tid!r}) to work there: {link['url']}")
+
+    return wrapper
+
+
+press_key = _links_in_background(_bh.press_key)
+
+
 # --- Codex-style cursor --------------------------------------------------------
 
 _CURSOR_ON = os.environ.get("OBU_CURSOR", "").strip().lower() not in {"0", "false", "no", "off"}
@@ -350,7 +420,7 @@ def _set_cursor_hidden(hidden):
         pass
 
 
-_click_at_xy = _bh.click_at_xy
+_click_at_xy = _links_in_background(_bh.click_at_xy)
 _scroll = _bh.scroll
 _capture_screenshot = _bh.capture_screenshot
 

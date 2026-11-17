@@ -27,8 +27,10 @@ check that limit first.
 
 - **Chromium browsers other than Google Chrome.** `OBU_CHROME_APP` exists;
   none has been tried.
-- **Tabs a page opens by itself** are not grouped, so `close_session()` does not
-  see them.
+- **Tabs a page opens with `window.open()`** open in front and are not grouped,
+  so `close_session()` does not see them. Links the agent clicks are handled
+  (docs/design.md); `window.open()` returns a window its caller may use, which
+  a background tab opened for it could not be.
 - **Extensions that talk to a desktop app** (1Password, Codex) reach it through
   a native messaging host, whose manifest apps register only in the everyday
   Chrome's folder; in the agent Chrome they cannot connect until the manifest

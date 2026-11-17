@@ -116,6 +116,32 @@ Details that cost a debugging session each:
   cold start and says so when the extension is missing.
 - **Group colour** is a hash of `BU_NAME`, so a session keeps its colour.
 
+## Links that open a tab
+
+A `target="_blank"` link clicked by the agent opens its tab in front, and Chrome
+activates the window for it, which raises the agent Chrome over the user's
+work. It happened on 2026-11-17 with a Taobao link: the new page became the
+selected tab. Once the page has asked for the tab, neither CDP nor the
+extension can stop the activation; `chrome.tabs.onCreated` comes after it.
+
+So `click_at_xy()` and `press_key()` put a one-shot `click` listener on the
+page for the length of the input. A click on a link that would open a new
+browsing context, which no page handler has already taken (`defaultPrevented`),
+is cancelled and opened by the helpers instead: a background tab from the
+extension (`bhOpenTab`), navigated with the referrer a click would have sent
+(`strict-origin-when-cross-origin`, none for `rel=noreferrer`), and grouped
+with the session. The daemon stays on the page that was clicked, as it did
+before, and the call prints the new tab's target id for `switch_tab()`.
+Measured on Chrome 157, 2026-11-17, sampling the frontmost app every 0.1 s: the
+click and an Enter on the focused link each gave an inactive tab in the
+session's group with `document.referrer` set, and the agent Chrome never came
+to the front.
+
+Left alone: links with `rel=opener` or `download`, targets naming a frame on
+the page, clicks inside cross-origin iframes (the listener is on the top page),
+`el.click()` from `js()`, and `window.open()`, whose caller may use the window
+it returns.
+
 ## The pointer
 
 `click_at_xy()` and `scroll()` write the target point onto `<html>` as an
