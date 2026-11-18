@@ -3,3 +3,6 @@ __pycache__/
 *.pyc
 .worktrees/
 dist/
+# install.sh links browser-harness interaction-skills into the skill directory; when that
+# directory is linked to this checkout, the link lands here.
+skills/open-browser-use/interaction-skills

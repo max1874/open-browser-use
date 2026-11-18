@@ -48,11 +48,14 @@ echo "data collection: off"
 
 # --- 5. skill -----------------------------------------------------------------
 # SKILL.md is copied, never linked: Claude Code and Codex both skip a skill whose
-# SKILL.md is a symlink, silently (the directory itself may be one).
+# SKILL.md is a symlink, silently (the directory itself may be one, linked to this
+# checkout; then it is already current).
 for dir in ${OBU_SKILL_DIRS:-"$HOME/.claude/skills" "$HOME/.codex/skills"}; do
   [ -d "$dir" ] || continue
-  mkdir -p "$dir/open-browser-use"
-  cp "$REPO/skill/open-browser-use/SKILL.md" "$dir/open-browser-use/SKILL.md"
+  if [ ! "$dir/open-browser-use" -ef "$REPO/skills/open-browser-use" ]; then
+    mkdir -p "$dir/open-browser-use"
+    cp "$REPO/skills/open-browser-use/SKILL.md" "$dir/open-browser-use/SKILL.md"
+  fi
   ln -sfn "$BH_SRC/interaction-skills" "$dir/open-browser-use/interaction-skills"
   echo "skill: $dir/open-browser-use"
   # Until 2026-11-05 it was installed as browser-harness; remove that copy.
