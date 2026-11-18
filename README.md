@@ -57,8 +57,8 @@ links then point into the clone, so a `git pull` is the update.
 
 `install.sh` is idempotent. It installs browser-harness as a uv tool, links the
 wrapper and the helpers into place, turns browser-harness's data collection off,
-and copies the skill into `~/.claude/skills` and `~/.codex/skills` when they
-exist. The agent Chrome starts on the first browser call.
+and copies the skill into `~/.claude/skills` (Claude Code) and `~/.agents/skills`
+(Codex and other agents) when they exist. The agent Chrome starts on the first browser call.
 
 Then, once, install the extension in the agent Chrome: open
 `chrome://extensions`, turn on Developer mode, click "Load unpacked" and choose
