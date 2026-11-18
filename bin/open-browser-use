@@ -32,8 +32,9 @@ REPO="$(dirname "$(dirname "$(realpath "$0")")")"
 EXTENSION="${OBU_EXTENSION:-$REPO/extension}"
 BH_PY="$HOME/.local/share/uv/tools/browser-harness/bin/python3"
 
-usage() { echo "usage: open-browser-use [start | restart [--force] | window PROFILE | reap]" >&2; exit 2; }
+usage() { echo "usage: open-browser-use [start | restart [--force] | window PROFILE | reap | --version]" >&2; exit 2; }
 case "${1:-start}" in
+  --version) sed -n 's/.*"version": *"\([^"]*\)".*/open-browser-use \1/p' "$REPO/extension/manifest.json"; exit 0 ;;
   start|restart) ;;
   window) [ -n "${2:-}" ] || usage ;;
   reap) [ -x "$BH_PY" ] || exit 0; exec "$BH_PY" -I "$REPO/libexec/reap.py" ;;

@@ -9,8 +9,29 @@
 #
 # Re-run after `uv tool upgrade browser-harness` (it replaces the bin/ shim)
 # and after moving this repo (every link points into it).
+#
+# Piped from curl there is no checkout beside the script: it puts the latest release (or
+# the tag given with `sh -s -- vX.Y.Z`) in ~/.local/share/open-browser-use/repo and runs
+# that release's install.sh. Rerunning it is the update.
+#
+#   curl -fsSL https://raw.githubusercontent.com/max1874/open-browser-use/main/install.sh | sh
 
 set -eu
+
+case $0 in
+*install.sh) ;;
+*)
+  url=https://github.com/max1874/open-browser-use
+  tag=${1:-$(curl -fsSLI -o /dev/null -w '%{url_effective}' "$url/releases/latest")}
+  tag=${tag##*/}
+  case $tag in v*) ;; *) echo "install.sh: no release found" >&2; exit 1 ;; esac
+  home="$HOME/.local/share/open-browser-use/repo"
+  [ -d "$home/.git" ] || git clone -q "$url.git" "$home"
+  git -C "$home" fetch -q --tags origin
+  git -C "$home" -c advice.detachedHead=false checkout -q "$tag"
+  exec "$home/install.sh"
+  ;;
+esac
 
 REPO="$(cd "$(dirname "$0")" && pwd -P)"
 BH_SRC="${BH_SRC:-$HOME/.local/share/browser-harness}"

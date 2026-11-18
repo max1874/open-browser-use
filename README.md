@@ -46,9 +46,14 @@ agent_helpers.py               loaded by browser-harness's own extension point:
 Requires macOS, [uv](https://docs.astral.sh/uv/) and Google Chrome.
 
 ```bash
-git clone https://github.com/max1874/open-browser-use.git
-open-browser-use/install.sh
+curl -fsSL https://raw.githubusercontent.com/max1874/open-browser-use/main/install.sh | sh
 ```
+
+That fetches the latest release into `~/.local/share/open-browser-use/repo` and
+runs its [`install.sh`](install.sh); rerun the same line to update, add
+`-s -- v0.2.2` to pin a release, and check with `open-browser-use --version`.
+To work on it, clone the repository and run `install.sh` from the clone; the
+links then point into the clone, so a `git pull` is the update.
 
 `install.sh` is idempotent. It installs browser-harness as a uv tool, links the
 wrapper and the helpers into place, turns browser-harness's data collection off,
@@ -57,7 +62,8 @@ exist. The agent Chrome starts on the first browser call.
 
 Then, once, install the extension in the agent Chrome: open
 `chrome://extensions`, turn on Developer mode, click "Load unpacked" and choose
-the repository's `extension/` folder. Chrome keeps it from then on. Each
+the `extension/` folder of the installed release
+(`~/.local/share/open-browser-use/repo/extension`, or your clone's). Chrome keeps it from then on. Each
 [release](https://github.com/max1874/open-browser-use/releases) also carries
 the extension as a zip, made by `scripts/release.sh`.
 
