@@ -6,6 +6,7 @@
 //   bhNameSession(key, title)             name_session(): retitle the session's group
 //   bhMarkTab(targetId, status)           mark_tab(): "deliverable" / "handoff" keeps the tab open, null clears
 //   bhCloseSession(key)                   close_session(): close the session's tabs except marked ones
+//   bhOwner(targetId)                     the tab lock: which session's group holds the tab
 //   bhSessionKeys() / bhReapSession(key, all)  libexec/reap.py: close an ended session's tabs
 // key is BU_NAME, one per agent session.
 //
@@ -28,7 +29,7 @@ setInterval(() => chrome.runtime.getPlatformInfo(), 20e3);
 // on a mismatch: after a reload via CDP, Chrome can keep running the previous
 // worker script even though the manifest is new (seen 2026-10-10, Chrome 154).
 // Bump it with agent_helpers.py's _GROUPS_API whenever the functions change.
-self.bhApi = 10;
+self.bhApi = 11;
 
 const COLORS = ["blue", "red", "yellow", "green", "pink", "purple", "cyan", "orange"];
 
@@ -38,8 +39,9 @@ function colorFor(key) {
   return COLORS[h % COLORS.length];
 }
 
-// { [key]: { groupId?, title? } } — the title is kept so a group recreated
-// after its last tab closed gets the session's name back.
+// { [key]: { groupId?, title?, done? } } — the title is kept so a group
+// recreated after its last tab closed gets the session's name back; done says
+// the session called close_session() and has not opened a tab since.
 async function sessions() {
   return (await chrome.storage.local.get("sessions")).sessions || {};
 }
@@ -106,8 +108,8 @@ self.bhGroup = async (targetId, key, defaultTitle) => {
   } else {
     groupId = await chrome.tabs.group({ tabIds: [tab.id], createProperties: { windowId: tab.windowId } });
     await chrome.tabGroups.update(groupId, { title: session.title || defaultTitle, color: colorFor(key) });
-    await saveSession(key, { groupId });
   }
+  await saveSession(key, { groupId, done: false });
   return { groupId };
 };
 
@@ -157,10 +159,21 @@ self.bhCloseSession = async (key) => {
   const tabs = await chrome.tabs.query({ groupId: group.id });
   const marked = await statuses();
   const close = tabs.filter((t) => !marked[t.id]).map((t) => t.id);
+  await saveSession(key, { done: true }); // the kept tabs are free for another session to take
   // Not awaited: closing a profile's last window ends this worker before it
   // could answer (2026-11-08).
   if (close.length) chrome.tabs.remove(close).catch(() => {});
   return { closed: close.length, kept: tabs.length - close.length };
+};
+
+// A tab belongs to the session whose group holds it; agent_helpers.py refuses
+// it to every other session while this one runs and is not done.
+self.bhOwner = async (targetId) => {
+  const tabId = await tabIdOf(targetId);
+  const tab = tabId === undefined ? null : await chrome.tabs.get(tabId).catch(() => null);
+  if (!tab || tab.groupId < 0) return {};
+  const [key, session] = Object.entries(await sessions()).find(([, s]) => s.groupId === tab.groupId) || [];
+  return key ? { key, done: !!session.done, title: (await liveGroup(tab.groupId))?.title } : {};
 };
 
 // For libexec/reap.py, on sessions that have ended: close_session() on their

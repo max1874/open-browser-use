@@ -39,8 +39,16 @@ where the agent acts. capture_screenshot() hides it for the shot.
 OBU_CURSOR=0 turns the cursor off. mark_tab() marks a tab as "deliverable" or
 "handoff"; close_session() closes the session's tabs when its browser work is
 done, keeping the marked ones.
+
+Tab lock and element refs
+-------------------------
+A tab in another running session's group is refused (tab_locked) by every
+call that takes a tab. snapshot() lists the page's interactive elements with
+refs ("@e3") for click() and fill_input(), which re-find a re-rendered element
+by role and name and refuse rather than act on another one (docs/design.md).
 """
 
+import collections
 import functools
 import json
 import os
@@ -48,6 +56,7 @@ import subprocess
 import time
 
 import browser_harness.helpers as _bh
+from browser_harness import _ipc
 
 _orig_cdp = _bh.cdp
 _armed = False
@@ -65,6 +74,8 @@ def _arm_focus_emulation():
 
 def cdp(method, session_id=None, **params):
     """Raw CDP, with focus emulation armed lazily on first use."""
+    if method in _TAB_CALLS:
+        _claim(params.get("targetId"))
     if not _armed:
         _arm_focus_emulation()
     return _orig_cdp(method, session_id=session_id, **params)
@@ -93,7 +104,7 @@ del _name, _fn
 
 
 _GROUPS_SW = "/bh_session_groups_sw.js"
-_GROUPS_API = 10  # must match self.bhApi in extension/bh_session_groups_sw.js
+_GROUPS_API = 11  # must match self.bhApi in extension/bh_session_groups_sw.js
 _PROFILE = os.environ.get("OBU_PROFILE")  # set by bin/browser-harness from profiles.json
 _OBU = os.path.join(os.path.dirname(os.path.realpath(__file__)), "bin", "open-browser-use")
 
@@ -227,31 +238,43 @@ def name_session(title):
         return False
 
 
-_new_tab = globals()["new_tab"]
+# --- Tab lock ------------------------------------------------------------------
+
+# Every session's tabs are in one Chrome, and switch_tab(), js(target_id=),
+# activate_tab() and close_tab() take any target id, including another running
+# session's tab. These are the CDP calls they make with it.
+_TAB_CALLS = ("Target.attachToTarget", "Target.activateTarget", "Target.closeTarget")
 
 
-def _recover_closed_tab():
-    """If the daemon's tab is gone, let it attach to its replacement now; True if it did.
+def _claim(target_id):
+    """Refuse another running session's tab; take over one that session has let go of.
 
-    After close_session() (or the user closing the tab), the daemon's next
-    page-level call finds its session stale and opens a fresh about:blank.
-    Upstream new_tab() makes such calls (focus emulation, unmarking the old
-    tab) and then opens its own tab as well, so that about:blank was left
-    ungrouped, outside close_session() and the reaper, until the daemon stopped
-    (2026-10-16: one per session in the agent Chrome). Triggering the
-    replacement first lets new_tab() reuse it.
+    A tab belongs to the session whose group holds it, and is let go of once
+    that session calls close_session() or its daemon is gone (it ended, the
+    reaper stopped it). Ungrouped tabs and other targets are anyone's.
     """
+    if not target_id:
+        return
     try:
-        _bh.current_tab()
-        return False
+        info = _orig_cdp("Target.getTargetInfo", targetId=target_id)["targetInfo"]
     except Exception:
-        pass
-    try:
-        cdp("Runtime.evaluate", expression="0")
-        _bh.current_tab()
-        return True
-    except Exception:
-        return False
+        raise RuntimeError(f"tab_gone: tab {target_id} was closed") from None
+    sw = info["type"] == "page" and next(
+        (w for w in _find_groups_workers() if w["browserContextId"] == info["browserContextId"]), None)
+    sw = sw and _current(sw)
+    owner = (sw and _eval_in(sw, f"bhOwner({json.dumps(target_id)})")) or {}
+    key = owner.get("key")
+    if not key or key == _session_key():
+        return
+    if not owner["done"] and _ipc.ping(key):
+        raise RuntimeError(
+            f'tab_locked: tab {target_id} is in the tab group "{owner.get("title")}" of session {key}, '
+            "which is still running. Work in your own tabs (new_tab()); a tab is free once its session "
+            "calls close_session() or ends.")
+    _group_tab(target_id, sw)
+
+
+_new_tab = globals()["new_tab"]
 
 
 def _blank(url):
@@ -262,34 +285,29 @@ def _context(target_id):
     return _orig_cdp("Target.getTargetInfo", targetId=target_id)["targetInfo"]["browserContextId"]
 
 
-def _upstream_new_tab(url):
-    """upstream's tab, which CDP opens in the last used profile: fine without profiles."""
-    if _recover_closed_tab() and url == "about:blank":
-        return _bh.current_tab()["targetId"]  # upstream new_tab("about:blank") would open another
-    return _new_tab(url)
-
-
 def new_tab(url="about:blank"):
     sw = _groups_worker(wake=True, open_profile=True)
-    if not sw:  # no extension: ungrouped
-        return _upstream_new_tab(url)
+    if not sw:  # no extension: upstream's tab, ungrouped, in the last used profile
+        return _new_tab(url)
     # CDP opens tabs only in the last used profile, so the tab comes from this
     # profile's worker. The daemon's own blank tab is reused when it is here,
     # and closed when it went to another profile.
-    _recover_closed_tab()
-    cur = _bh.current_tab()
-    if _blank(cur["url"]) and _context(cur["targetId"]) == sw["browserContextId"]:
+    try:
+        cur = _bh.current_tab()
+    except RuntimeError:  # tab_gone: close_session(), or the user closed it
+        cur = None
+    if cur and _blank(cur["url"]) and _context(cur["targetId"]) == sw["browserContextId"]:
         tid = cur["targetId"]
     else:
         opened = _eval_in(sw, "bhOpenTab()") or {}
         if "targetId" not in opened:
             if _PROFILE:
                 raise RuntimeError(f'could not open a tab in the Chrome profile "{_PROFILE}": {opened.get("error")}')
-            return _upstream_new_tab(url)
+            return _new_tab(url)
         tid = opened["targetId"]
         switch_tab(tid)
         # A named daemon's own tab is about:blank; anything else may be the user's.
-        if cur["url"] == "about:blank" and os.environ.get("BU_NAME"):
+        if cur and cur["url"] == "about:blank" and os.environ.get("BU_NAME"):
             _orig_cdp("Target.closeTarget", targetId=cur["targetId"])
     if url != "about:blank":
         _goto_url(url)
@@ -304,10 +322,9 @@ _goto_url = _bh.goto_url
 
 def goto_url(url):
     if _PROFILE:
-        # When its tab is gone the daemon opens a replacement, and CDP puts it
-        # in the last used profile: navigate there and this session would be
-        # on the other profile's logins.
-        _recover_closed_tab()
+        # The daemon's first tab comes from CDP, which puts it in the last used
+        # profile: navigate there and this session would be on the other
+        # profile's logins.
         sw = _groups_worker()
         if not sw or _context(_bh.current_tab()["targetId"]) != sw["browserContextId"]:
             new_tab()
@@ -322,10 +339,10 @@ goto_url.__doc__ = _goto_url.__doc__
 # Two things are checked around each click, key press and scroll, in one page
 # evaluation before the input:
 #
-# - Focus emulation. The daemon re-attaches silently when its tab closes
-#   (close_session(), the reaper, the user), and the new CDP session starts
-#   without it: after close_session() and new_tab(), every click did nothing
-#   (2026-11-17). A hidden page is re-armed here.
+# - Focus emulation. The daemon re-attaches silently when its CDP session
+#   drops, and the new session starts without it: after close_session() and
+#   new_tab(), every click did nothing (2026-11-17, when the daemon still moved
+#   to a replacement tab). A hidden page is re-armed here.
 # - Pages opening a tab. A target=_blank link or GET form opens its tab in
 #   front and raises Chrome (2026-11-17, a Taobao link), and nothing stops that
 #   once the page has asked. For the length of the input the page leaves them
@@ -500,6 +517,205 @@ for _f, _orig in ((click_at_xy, _click_at_xy), (scroll, _scroll), (capture_scree
 del _f, _orig
 
 
+# --- Element refs ---------------------------------------------------------------
+
+# Agents found elements in the raw accessibility tree and clicked by
+# coordinates, so a click that landed on a cookie banner, or on whatever had
+# taken the element's place, still read as success. A ref names one element of
+# a snapshot. Each browser-harness call is its own process, so refs live in a
+# file per session next to the daemon's log, with the tab and document they
+# came from: backend node ids are only meaningful within one document.
+_REF_ROLES = {
+    "button", "link", "textbox", "searchbox", "combobox", "listbox", "option", "checkbox", "radio",
+    "switch", "slider", "spinbutton", "tab", "menuitem", "menuitemcheckbox", "menuitemradio", "treeitem",
+}
+_REF_STATES = ("disabled", "checked", "selected", "expanded")
+_REFS = _ipc.log_path(_session_key()).with_suffix(".refs")
+
+# Before the input: the element's centre, scrolled into view, or why a click
+# there would not reach it. A one-shot listener then records whether the press
+# did, for _PRESS_TAKE to read after it.
+_PRESS_POINT = r"""function () {
+  if (!this.isConnected) return {error: "is no longer on the page"};
+  let r = this.getBoundingClientRect();
+  if (r.top < 0 || r.left < 0 || r.bottom > innerHeight || r.right > innerWidth) {
+    this.scrollIntoView({block: "center", inline: "center", behavior: "instant"});
+    r = this.getBoundingClientRect();
+  }
+  if (!r.width || !r.height || !this.checkVisibility({visibilityProperty: true})) return {error: "is hidden"};
+  if (this.matches(":disabled")) return {error: "is disabled"};
+  const x = r.left + r.width / 2, y = r.top + r.height / 2;
+  if (x < 0 || y < 0 || x >= innerWidth || y >= innerHeight) return {error: "is outside the viewport"};
+  let hit = document.elementFromPoint(x, y);
+  for (let inner; hit?.shadowRoot && (inner = hit.shadowRoot.elementFromPoint(x, y)) && inner !== hit;) hit = inner;
+  const mine = [this, ...(this.labels || [])];  // a click on its label reaches a field too
+  const within = (n) => { for (; n; n = n.parentNode || n.host) if (mine.includes(n)) return true; return false; };
+  if (!within(hit)) {
+    const what = hit ? hit.localName + (hit.id ? "#" + hit.id : "") + [...hit.classList].slice(0, 2).map((c) => "." + c).join("") : "nothing";
+    return {error: `is covered by <${what}> at its centre`};
+  }
+  const p = window.__obuPress = {hit: false, on: (e) => { p.hit = e.composedPath().some((n) => mine.includes(n)); }};
+  addEventListener("mousedown", p.on, {capture: true, once: true});
+  return {x, y};
+}"""
+_PRESS_TAKE = """(() => {
+  const p = window.__obuPress;
+  if (!p) return null;
+  removeEventListener("mousedown", p.on, {capture: true});
+  delete window.__obuPress;
+  return p.hit;
+})()"""
+_SELECT_TEXT = """function (clear) {
+  if (this.select) {
+    this.select();
+    if (!clear) try { this.setSelectionRange(this.value.length, this.value.length); } catch {}
+  } else {
+    getSelection().selectAllChildren(this);
+    if (!clear) getSelection().collapseToEnd();
+  }
+}"""
+_CHANGED = """function () {
+  this.dispatchEvent(new Event("input", {bubbles: true}));
+  this.dispatchEvent(new Event("change", {bubbles: true}));
+}"""
+
+
+def _load_refs():
+    try:
+        return json.loads(_REFS.read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def _document():
+    return cdp("Page.getFrameTree")["frameTree"]["frame"]["loaderId"]
+
+
+def _ax_value(node, field):
+    return node.get(field, {}).get("value", "")
+
+
+def _interactive():
+    """(backend node id, role, name, AX node) of each interactive element of the page."""
+    for n in cdp("Accessibility.getFullAXTree")["nodes"]:
+        if not n.get("ignored") and _ax_value(n, "role") in _REF_ROLES and "backendDOMNodeId" in n:
+            yield n["backendDOMNodeId"], _ax_value(n, "role"), _ax_value(n, "name"), n
+
+
+def _describe(role, name, ax):
+    props = {p["name"]: p["value"].get("value") for p in ax.get("properties", [])}
+    value = _ax_value(ax, "value")
+    return (f"{role} {json.dumps(name[:80], ensure_ascii=False)}"
+            + (f" = {json.dumps(str(value)[:80], ensure_ascii=False)}" if value != "" else "")
+            + "".join(f" [{s}]" for s in _REF_STATES if props.get(s) in (True, "true")))
+
+
+def snapshot():
+    """The page's interactive elements, one per line: '@e3 button "Sign in"'.
+
+    click("@e3") and fill_input("@e5", text) take these refs. A ref keeps naming
+    the same element across snapshots of the page; after a re-render it is found
+    again by role and name, and refused when that is no longer exactly one
+    element. Refs belong to this tab: take a new snapshot after switch_tab().
+    """
+    tid, doc, old = _bh.current_tab()["targetId"], _document(), _load_refs()
+    known = {(e["node"], e["doc"]): r for r, e in old.get("refs", {}).items()} if old.get("target") == tid else {}
+    nodes = list(_interactive())
+    count = collections.Counter((role, name) for _, role, name, _ in nodes)
+    n, refs, lines = old.get("next", 1), {}, []
+    for node, role, name, ax in nodes:
+        ref = known.get((node, doc))
+        if not ref:  # numbers are never reused, so an old ref cannot name a new element
+            ref, n = f"e{n}", n + 1
+        refs[ref] = {"node": node, "doc": doc, "role": role, "name": name, "dup": count[role, name] > 1}
+        lines.append(f"@{ref} {_describe(role, name, ax)}")
+    _REFS.write_text(json.dumps({"target": tid, "next": n, "refs": refs}))
+    return "\n".join(lines)
+
+
+def _still(node, role, name):
+    try:
+        ax = cdp("Accessibility.getPartialAXTree", backendNodeId=node, fetchRelatives=False)["nodes"][0]
+    except Exception:
+        return False  # gone with its document or garbage-collected
+    return not ax.get("ignored") and (_ax_value(ax, "role"), _ax_value(ax, "name")) == (role, name)
+
+
+def _ref_node(ref):
+    """The backend node id of the element ref names now, or an error saying why there is none."""
+    key = ref.removeprefix("@")
+    refs = _load_refs()
+    e = refs.get("refs", {}).get(key)
+    if not e:
+        raise RuntimeError(f"unknown ref @{key}: take a snapshot() of this page first")
+    if refs["target"] != _bh.current_tab()["targetId"]:
+        raise RuntimeError(f"@{key} is from another tab: take a snapshot() of this one")
+    doc = _document()
+    if e["doc"] == doc and _still(e["node"], e["role"], e["name"]):
+        return e["node"]
+    what = f'@{key} ({e["role"]} {json.dumps(e["name"], ensure_ascii=False)}) is stale'
+    if e["dup"]:
+        raise RuntimeError(f"{what} and the snapshot had several such elements: take a new snapshot()")
+    found = [node for node, role, name, _ in _interactive() if (role, name) == (e["role"], e["name"])]
+    if len(found) != 1:
+        raise RuntimeError(f"{what} and {len(found) or 'no'} such elements are on the page now: take a new snapshot()")
+    e.update(node=found[0], doc=doc)
+    _REFS.write_text(json.dumps(refs))
+    return found[0]
+
+
+def _call_on(node, function, *args):
+    obj = cdp("DOM.resolveNode", backendNodeId=node)["object"]["objectId"]
+    r = cdp("Runtime.callFunctionOn", objectId=obj, functionDeclaration=function, returnByValue=True,
+            arguments=[{"value": a} for a in args])
+    if "exceptionDetails" in r:
+        raise RuntimeError(r["exceptionDetails"].get("exception", {}).get("description") or r["exceptionDetails"]["text"])
+    return r["result"].get("value")
+
+
+def _click_ref(ref):
+    node = _ref_node(ref)
+    at = _call_on(node, _PRESS_POINT)
+    if "error" in at:
+        raise RuntimeError(f"{ref} {at['error']}; nothing was clicked")
+    click_at_xy(at["x"], at["y"])
+    try:
+        landed = _orig_cdp("Runtime.evaluate", expression=_PRESS_TAKE, returnByValue=True)["result"].get("value")
+    except Exception:
+        landed = None  # the click navigated away
+    if landed is False:
+        raise RuntimeError(f"the click at ({at['x']:.0f}, {at['y']:.0f}) landed on another element, not {ref}")
+    return node
+
+
+def click(ref):
+    """Click an element of snapshot() by its ref, "@e3".
+
+    Raises instead of clicking when the element is hidden, disabled or covered
+    (a dialog, a banner), or when the ref no longer names one element, and when
+    the press did not reach it.
+    """
+    _click_ref(ref)
+
+
+_fill_input = _bh.fill_input
+
+
+def fill_input(selector, text, clear_first=True, timeout=0.0):
+    if not selector.startswith("@"):
+        return _fill_input(selector, text, clear_first=clear_first, timeout=timeout)
+    node = _click_ref(selector)  # focuses it, with click()'s checks
+    _call_on(node, _SELECT_TEXT, clear_first)
+    if clear_first:
+        press_key("Backspace")
+    for ch in text:
+        press_key(ch)
+    _call_on(node, _CHANGED)
+
+
+fill_input.__doc__ = _fill_input.__doc__ + '\n    selector may be a ref from snapshot(), "@e5": clicked, then typed into.\n'
+
+
 # --- Tab status ----------------------------------------------------------------
 
 def mark_tab(status, target=None):
@@ -514,6 +730,7 @@ def mark_tab(status, target=None):
     if status not in ("deliverable", "handoff", None):
         raise ValueError('status must be "deliverable", "handoff" or None')
     target_id = _bh._target_id(target) if target is not None else _bh.current_tab()["targetId"]
+    _claim(target_id)
     try:
         r = _call_groups_worker("bhMarkTab", target_id, status, wake=True)
         ok = bool(r) and "error" not in r

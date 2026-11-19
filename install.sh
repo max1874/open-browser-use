@@ -40,7 +40,7 @@ BIN="$HOME/.local/bin"
 CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/browser-harness"
 
 # --- 1. browser-harness ----------------------------------------------------
-# The fork carries two small daemon patches (docs/design.md, "The fork");
+# The fork carries three small daemon patches (docs/design.md, "The fork");
 # upstream stays reachable as the `upstream` remote for rebases.
 if [ ! -d "$BH_SRC/.git" ]; then
   git clone -b max https://github.com/max1874/browser-harness.git "$BH_SRC"

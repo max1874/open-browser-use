@@ -73,13 +73,12 @@ exist yet when the helpers load), and disarms after `new_tab()`, `switch_tab()`
 and `ensure_real_tab()`, because attaching to another target starts a new CDP
 session and the setting belongs to the session.
 
-The daemon also attaches on its own: when its tab closes (`close_session()`,
-the reaper, the user), its next call finds the session stale and moves to a
-replacement tab, and the helpers are not told. After `close_session()` and
-`new_tab()` the page read `hidden` and every click did nothing (Chrome 157,
-2026-11-17). So `click_at_xy()`, `press_key()` and `scroll()` read
-`visibilityState` before the input, in the same evaluation as the guard below,
-and re-arm when it is `hidden`.
+The daemon also attaches on its own when its CDP session drops, and the
+helpers are not told. When it still moved to a replacement tab after its tab
+closed, the page read `hidden` after `close_session()` and `new_tab()`, and
+every click did nothing (Chrome 157, 2026-11-17). So `click_at_xy()`,
+`press_key()` and `scroll()` read `visibilityState` before the input, in the
+same evaluation as the guard below, and re-arm when it is `hidden`.
 
 Two traps found while testing this:
 
@@ -163,6 +162,99 @@ and location prompts, an external protocol, a download, picture-in-picture,
 Chrome to the front. `print()` and `alert()` do block the page, so later
 `js()` calls time out until the dialog is gone.
 
+## The tab lock
+
+Every session's tabs live in one Chrome, and `switch_tab()`, `js(target_id=)`,
+`close_tab()`, `activate_tab()` and `mark_tab()` take any target id. Nothing
+stopped one session from driving, closing or marking another session's tab.
+
+A tab belongs to the session whose tab group holds it. The extension already
+keeps that record (`bhGroup`), so the lock needs no second one: `cdp()` in
+`agent_helpers.py` checks the three CDP calls these helpers make with a target
+id (`Target.attachToTarget`, `activateTarget`, `closeTarget`), and `mark_tab()`
+checks its target, against the worker's `bhOwner`. Another session's tab is
+refused with `tab_locked`, naming the group and the session, while that
+session's daemon answers and it has not called `close_session()`. Ungrouped
+tabs, the user's own, stay open to anyone, as before.
+
+A tab changes hands one way: its session lets go of it. `close_session()` marks
+the session done (`bhCloseSession`), which frees the tabs it keeps for the
+user; a daemon that is gone (the session ended, the reaper stopped it) frees
+them too. The next session that switches to such a tab takes it into its own
+group, so its `close_session()` and the reaper now treat it as that session's;
+opening a tab again makes the first session not done. There is no way to take a
+tab from a running session and no override: an agent would reach for it at the
+first refusal, and a second session rarely needs the tab itself, since logins
+belong to the profile and a tab of its own has them.
+
+**A closed tab is reported, not replaced.** When its tab closed, the daemon
+used to attach to its own first tab or a new blank one and run the call there,
+so a click meant for a closed tab landed on another page and returned
+normally. Measured with the unpatched daemon, Chrome 157, 2026-11-19:
+`close_tab()` then `click_at_xy(10, 10)` returned, and `current_tab()` was a new
+`about:blank`. The fork now answers every page call and `current_tab()` with
+`tab_gone` until the session moves to a tab with `new_tab()` or
+`switch_tab()`; switching to a closed tab gives `tab_gone` too.
+
+Measured on Chrome 157, 2026-11-19, two sessions (`cc-<id>` from the wrapper,
+`sub-locktest` as a sub-agent's `BU_NAME`) on a second agent Chrome in the
+background: B's `switch_tab`, `js(target_id=)`, `close_tab` and `mark_tab` on
+A's tab each raised `tab_locked`; B kept working in its own tab; A's calls
+after its tab closed raised `tab_gone` and `new_tab()` recovered; after A's
+`close_session()` B took A's kept tab into its group, A was then refused, and A
+took it back once B's daemon stopped. The check adds about 10 ms to a switch.
+
+Not copied from agent-browser's `--pin-tab`: the lock is always on rather than
+a flag, since anything that depends on an agent remembering a flag fails the
+first time it forgets; it covers the session's whole group rather than one
+pinned tab; and a `tab_gone` error carries no last URL for recovery.
+
+## Element refs
+
+Agents found elements in `Accessibility.getFullAXTree` and clicked by
+coordinates, so a click on whatever covered the element (a cookie banner, a
+dialog) or had taken its place after a re-render still returned normally.
+
+`snapshot()` lists the page's interactive elements, those with an ARIA widget
+role, one per line with a ref: `@e3 button "Sign in"`, plus a field's value
+and `[disabled]`, `[checked]`, `[selected]` or `[expanded]`. `click(ref)` and
+`fill_input(ref, text)` act on them. Each `browser-harness` call is its own
+process, so the refs live in a file beside the daemon's log
+(`bu-<name>.refs`, removed with it by the reaper), recording the tab, the
+document (its loader id), the backend node id, role and name of each.
+
+A ref keeps naming one element:
+
+- Its node is used while it is in the same document and still has the role and
+  name of the snapshot; a framework can reuse a node for other content. Node
+  ids from another document are never used.
+- Otherwise it is found again by role and name, and refused when that matches
+  no element or several, or when the snapshot itself had several; a new
+  snapshot is the answer. Refs are numbered once per session, so an old ref can
+  never name a new element, and the same node keeps its ref across snapshots.
+- Before the press, the element is scrolled into view and its centre is hit
+  tested: hidden, zero-sized, disabled, outside the viewport or covered by
+  another element (its label counts as the element) is an error and nothing is
+  clicked. A one-shot `mousedown` listener then confirms the press reached the
+  element; one that landed elsewhere (a dialog that opened in between) is an
+  error too.
+
+Measured on Chrome 157, 2026-11-19, on TodoMVC's React example in a background
+tab: typing three items by ref, toggling one by ref, routing to `#/active` and
+back, reloading and adding an item through a ref from before the reload all
+worked; a ref to a removed checkbox (several unnamed checkboxes) was refused, a
+link replaced by an identical node was found again, a link renamed in place was
+refused, and a full-page overlay, a zero-sized link and a dialog that appeared
+150 ms after the check each failed the click with the link not followed. A
+snapshot of a long Wikipedia article was 745 lines, 24 k characters, 0.17 s.
+
+Not copied from agent-browser's `snapshot`: the full tree with headings and
+text (agents read text with `js()`), elements that are only clickable by
+`cursor: pointer`, and iframes. Refs cover the top document's ARIA widgets;
+anything else is still clicked by coordinates. Its wait for animation frames
+before measuring is left out too: a background tab may not run them, and an
+instant `scrollIntoView` is measured at once.
+
 ## The pointer
 
 `click_at_xy()` and `scroll()` write the target point onto `<html>` as an
@@ -208,7 +300,7 @@ account-stored groups from the device when that data type is switched off.
 
 ## The fork
 
-Two patches live on the `max` branch of
+Three patches live on the `max` branch of
 [max1874/browser-harness](https://github.com/max1874/browser-harness), each
 because the helpers process cannot reach what it changes:
 
@@ -218,6 +310,9 @@ because the helpers process cannot reach what it changes:
   daemon process.
 - A `release_target` daemon command: `mark_tab()` hands the tab over, so a
   daemon that stops no longer closes a tab the user was asked to look at.
+- `tab_gone` instead of a replacement tab when a named daemon's tab has closed
+  (above). Only the daemon knows which tab it was on: each helpers process
+  starts after the move has already happened.
 
 ## Data collection
 

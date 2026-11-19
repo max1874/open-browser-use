@@ -103,11 +103,14 @@ for pid_file in sorted(glob.glob(str(ipc._RUNTIME / "bu-*.pid"))):
         continue
     print(f"reap: {name}: " + ("still running" if alive(pid) else "stopped"))
 
-# Daemon logs: one per name ever used, never removed (170 on 2026-10-12).
+# Daemon logs: one per name ever used, never removed (170 on 2026-10-12), and
+# the element refs agent_helpers.py keeps beside them.
 for log in glob.glob(str(ipc._TMP / "bu-*.log")):
     name = os.path.basename(log)[len("bu-"):-len(".log")]
     if not os.path.exists(ipc._RUNTIME / f"bu-{name}.pid") and now - os.path.getmtime(log) > 7 * DAY:
         os.unlink(log)
+        if os.path.exists(refs := log[:-len(".log")] + ".refs"):
+            os.unlink(refs)
 
 
 # --- tab groups of ended sessions ---------------------------------------------

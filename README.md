@@ -11,7 +11,7 @@ Code, Codex and their sub-agents:
 | Problem | What happens here |
 |---|---|
 | Agents drive the tab you are reading | One dedicated Chrome on its own profile and port; your everyday browser is never touched |
-| Two sessions fight over one tab | Each agent session gets its own daemon and its own tabs, derived from the session id, with no flag to remember |
+| Two sessions fight over one tab | Each agent session gets its own daemon and its own tabs, derived from the session id, with no flag to remember; another running session's tabs are locked |
 | Background clicks silently do nothing | Focus emulation turns a hidden tab's input back on, so clicks and key presses land without raising Chrome |
 | You cannot tell whose tabs are whose | Every session's tabs share one named, coloured tab group: `🔑 Sign up for Tiingo` |
 | You cannot see what the agent is doing | A glowing pointer glides to each click before it lands |
@@ -99,6 +99,8 @@ click_at_xy(x, y)                       # the pointer glides there first (OBU_CU
 mark_tab("handoff")                     # the user has to act here: keep it open
 mark_tab("deliverable")                 # a result the user should look at: keep it open
 close_session()                         # close this session's tabs, except the marked ones
+print(snapshot())                       # the page's controls with refs: @e3 button "Sign in"
+click("@e3"); fill_input("@e5", "hi")   # refuse a hidden, covered or changed element instead of clicking
 ```
 
 The `/open-browser-use` skill in [skills/open-browser-use/SKILL.md](skills/open-browser-use/SKILL.md)
@@ -129,7 +131,7 @@ tells agents when to call each of these.
 ## Credits
 
 Built on [browser-use/browser-harness](https://github.com/browser-use/browser-harness)
-by Browser Use, through a fork with two small daemon patches
+by Browser Use, through a fork with three small daemon patches
 ([max1874/browser-harness](https://github.com/max1874/browser-harness), branch `max`).
 The skill started from browser-harness's own `SKILL.md`.
 
