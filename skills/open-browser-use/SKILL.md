@@ -55,6 +55,13 @@ PY
   your reply; the mark is invisible.
 - When the browser work is done: `close_session()`. It closes your tabs except
   the marked ones. Skip it while waiting on the user in a handoff tab.
+- Tabs in another running session's group are locked: `switch_tab()`,
+  `js(target_id=)`, `close_tab()` and `mark_tab()` on them raise `tab_locked`.
+  Open your own with `new_tab()`; logins belong to the profile, not the tab. A
+  tab is free once its session has called `close_session()` or ended, and
+  switching to it makes it yours.
+- `tab_gone` means your tab was closed (by you, `close_session()` or the user):
+  `new_tab()` or `switch_tab()` to one of yours.
 
 ## Helpers
 
@@ -70,6 +77,7 @@ upload_file(selector, path)    capture_screenshot(path=None, full=False, max_dim
 list_tabs()  current_tab()  switch_tab(target)  close_tab(target=None)  ensure_real_tab()
 iframe_target(url_substr)      http_get(url, headers=None)
 name_session(title)  mark_tab("handoff" | "deliverable" | None, target=None)  close_session()
+snapshot() -> str              click("@e3")             fill_input("@e5", text)
 ```
 
 Nothing else exists: there is no `screenshot`, `goto` or `navigate`.
@@ -80,14 +88,21 @@ Nothing else exists: there is no `screenshot`, `goto` or `navigate`.
   for content an app renders later `wait_for_element(selector)`; after a submit
   `wait_for_network_idle()`. A fixed `time.sleep()` longer than a second is
   almost always one of these.
-- **Find elements in the accessibility tree**, not in screenshots:
-  `cdp("Accessibility.getFullAXTree")["nodes"]` gives every element's role, name
-  and `backendDOMNodeId`. Filter in Python before printing; it is thousands of
-  nodes. Centre for clicking:
-  `q = cdp("DOM.getBoxModel", backendNodeId=n)["model"]["content"]; x, y = sum(q[0::2])/4, sum(q[1::2])/4`.
-  Negative or oversized coordinates mean scroll first.
-- **Click by coordinates**: `click_at_xy(x, y)` passes through iframes and shadow
-  DOM. Then verify with a targeted `js(...)` or `page_info()`.
+- **Act through refs.** `snapshot()` lists the page's buttons, links, fields
+  and other controls as `@e3 button "Sign in"`; a long page has hundreds, so
+  filter before printing:
+  `print("\n".join(l for l in snapshot().splitlines() if "Sign" in l))`.
+  Then `click("@e3")` or `fill_input("@e5", "text")`. They raise instead of
+  acting when the element is hidden, disabled or covered (a banner, a dialog:
+  deal with it first), or when the page changed and the ref no longer names one
+  element: take a new `snapshot()`. Do not fall back to its coordinates.
+- **Elements a snapshot lacks** (a clickable `div` without a role, content in
+  an iframe): `cdp("Accessibility.getFullAXTree")["nodes"]` gives role, name
+  and `backendDOMNodeId`; filter in Python. Centre:
+  `q = cdp("DOM.getBoxModel", backendNodeId=n)["model"]["content"]; x, y = sum(q[0::2])/4, sum(q[1::2])/4`,
+  then `click_at_xy(x, y)`, which passes through iframes and shadow DOM.
+  Negative or oversized coordinates mean scroll first. Verify with a targeted
+  `js(...)` or `page_info()`.
 - **`js()`**: write the expression as a raw string (`r"""…"""`) whenever it holds
   a regex or a backslash, or Python eats the escapes. Check a selector's result
   for `null` before reading from it.
