@@ -60,8 +60,9 @@ PY
   Open your own with `new_tab()`; logins belong to the profile, not the tab. A
   tab is free once its session has called `close_session()` or ended, and
   switching to it makes it yours.
-- `tab_gone` means your tab was closed (by you, `close_session()` or the user):
-  `new_tab()` or `switch_tab()` to one of yours.
+- `tab_gone` means your tab was closed (by you, `close_session()`, the user, or
+  because you made no browser call for two hours, which closes your unmarked
+  tabs): `new_tab()` or `switch_tab()` to one of yours.
 
 ## Helpers
 

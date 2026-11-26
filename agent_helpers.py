@@ -113,6 +113,12 @@ def _session_key():
     return os.environ.get("BU_NAME") or "default"
 
 
+# The daemon log's modification time is when this session last ran
+# browser-harness: libexec/reap.py closes the tabs of one that has not for two
+# hours. The daemon itself writes there only when it starts or reattaches.
+_ipc.log_path(_session_key()).touch()
+
+
 def _find_groups_workers():
     infos = _orig_cdp("Target.getTargets")["targetInfos"]
     return [t for t in infos if t["type"] == "service_worker" and t["url"].endswith(_GROUPS_SW)]
