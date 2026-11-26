@@ -26,9 +26,9 @@ icon.
 }
 ```
 
-A session uses the profile of the deepest folder that contains its working
-directory, otherwise `default`. Without the file there are no profiles: every
-session uses whichever profile has the extension, as before.
+A session uses the profile of the deepest folder that contains the folder it
+was started in, otherwise `default`. Without the file there are no profiles:
+every session uses whichever profile has the extension, as before.
 
 ## What Chrome actually does
 
@@ -51,7 +51,14 @@ with one agent Chrome (one `--user-data-dir`, one CDP port) holding two profiles
 
 **Which profile** (`bin/browser-harness`): the wrapper reads `profiles.json`
 and exports `OBU_PROFILE`, the same way it derives `BU_NAME`, so agents never
-pass it. Sub-agents inherit it.
+pass it. Sub-agents inherit it. The folder it looks up is the one the session
+was started in, read from the agent host's own record of the session (Claude
+Code: `~/.claude/sessions/$CLAUDE_PID.json`; Codex: the first line of the
+thread's rollout file), and the shell's working directory only when there is no
+such record. It was the working directory until 2026-11-26: two sessions
+started in a company folder ran `cd <scratch folder> && browser-harness` to
+write a file there, and their tabs opened in the personal profile, one of them
+on a login page the agent then reported as an expired login.
 
 **Cold start** (`open-browser-use start`): Chrome opens one profile (8), so it
 opens the calling session's; Local State maps the name to its directory.

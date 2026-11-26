@@ -40,24 +40,43 @@ if [ -z "$_skip_chrome" ] &&
    [ -z "${BU_CDP_URL:-}" ] && [ -z "${BU_CDP_WS:-}" ] && [ -z "${BU_BROWSER_ID:-}" ] &&
    [ -z "${OBU_USE_DEFAULT_CHROME:-}" ]; then
   # Which Chrome profile's logins this session uses: the deepest folder in
-  # profiles.json containing the working directory, else its default
-  # (docs/profiles.md). A cold start opens it. Sub-agents work in the same
-  # folder, so they get the same profile; setting OBU_PROFILE overrides it.
+  # profiles.json containing the folder the session was started in, else its
+  # default (docs/profiles.md). A cold start opens it. Sub-agents share the
+  # session, so they get the same profile; setting OBU_PROFILE overrides it.
   _CONF="${XDG_CONFIG_HOME:-$HOME/.config}/open-browser-use/profiles.json"
   if [ -z "${OBU_PROFILE:-}" ] && [ -f "$_CONF" ]; then
     # A broken file stops here: guessing a profile would mean the wrong logins.
     OBU_PROFILE=$(python3 -I - "$_CONF" <<'PY'
-import json, os, sys
+import glob, json, os, sys
 
+
+def session_folder():
+    """Where the session was started, from the agent host's own record of it.
+    The shell's directory is not that: an agent that cds to a scratch folder to
+    write a file there would switch logins mid-task (2026-11-25: a company
+    session's tabs opened in the personal profile). Without a record, the
+    working directory."""
+    home = os.path.expanduser("~")
+    try:
+        if pid := os.environ.get("CLAUDE_PID"):
+            return json.load(open(f"{home}/.claude/sessions/{pid}.json"))["cwd"]
+        if thread := os.environ.get("CODEX_THREAD_ID"):
+            with open(glob.glob(f"{home}/.codex/sessions/*/*/*/rollout-*-{thread}.jsonl")[0]) as rollout:
+                return json.loads(rollout.readline())["payload"]["cwd"]
+    except (OSError, LookupError, ValueError):
+        pass
+    return os.getcwd()
+
+
+folder = os.path.realpath(session_folder())
 try:
     conf = json.load(open(sys.argv[1]))
     folders = {os.path.realpath(os.path.expanduser(f)): p for f, p in conf.get("folders", {}).items()}
-    cwd = os.path.realpath(os.getcwd())
-    inside = [f for f in folders if cwd == f or cwd.startswith(f + os.sep)]
+    inside = [f for f in folders if folder == f or folder.startswith(f + os.sep)]
     profile = folders[max(inside, key=len)] if inside else conf["default"]
     assert isinstance(profile, str) and profile
 except Exception as e:
-    sys.exit(f"browser-harness: {sys.argv[1]}: no profile for {os.getcwd()} ({type(e).__name__}: {e})")
+    sys.exit(f"browser-harness: {sys.argv[1]}: no profile for {folder} ({type(e).__name__}: {e})")
 print(profile)
 PY
     ) || exit 1
