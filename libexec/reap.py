@@ -27,6 +27,18 @@ So an ended session's group is closed here too (the extension's
 bhReapSession), unmarked tabs at once and marked ones a day after the end.
 Tabs outside our groups (Codex's own @Chrome groups, ungrouped tabs) have no
 owner to read and are left alone.
+
+A session that is left open never ends: 2026-11-26 a group last used 25 hours
+before was still there, its Claude Code session idle in a terminal. So a
+session that has not run browser-harness for two hours gets close_session()
+called for it (bhCloseSession): unmarked tabs close, marked ones and the
+session's name stay, and its daemon keeps running, so its next call raises
+tab_gone instead of acting on a blank page. agent_helpers.py records each call
+as the modification time of the daemon's log.
+
+With tabs closing by themselves, a profile's window would close with its last
+group, and the profile's next session would bring Chrome to the front to open
+it again. So each profile keeps one tab outside every group.
 """
 import glob, json, os, sys, time, urllib.request
 from browser_harness import _ipc as ipc
@@ -35,6 +47,7 @@ from browser_harness.admin import restart_daemon
 HOME = os.path.expanduser("~")
 HOUR, DAY = 3600, 86400
 END = {"cc": HOUR, "cx": DAY}  # idle time after which a session counts as ended
+UNUSED = 2 * HOUR  # without a browser-harness call, after which a running session's tabs are closed
 now = time.time()
 
 
@@ -81,6 +94,14 @@ def started_at(name):
         return os.path.getmtime(ipc._RUNTIME / f"bu-{name}.pid")
     except OSError:
         return None
+
+
+def unused(name):
+    """Seconds since the session's last browser-harness call; 0 when nothing recorded one."""
+    try:
+        return now - os.path.getmtime(ipc.log_path(name))
+    except OSError:
+        return 0
 
 
 me = os.environ.get("BU_NAME")
@@ -166,13 +187,22 @@ def reap_groups():
                     return r["result"].get("value")
 
                 try:
+                    # Closing a profile's last tab closes its window and unloads the
+                    # profile, and opening it again brings Chrome to the front
+                    # (docs/profiles.md). What is closed below is in a group, so one
+                    # tab outside every group keeps the window.
+                    ev("chrome.tabs.query({groupId: chrome.tabGroups.TAB_GROUP_ID_NONE})"
+                       ".then((free) => free.length || chrome.tabs.create({active: false})).then(() => 0, () => 0)")
                     for key in ev("bhSessionKeys()") or []:
                         if key == me:
                             continue
                         started = started_at(key)
-                        if not ended(key, started):
+                        if ended(key, started):
+                            r = ev(f"bhReapSession({json.dumps(key)}, {json.dumps(ended(key, started, DAY))})")
+                        elif unused(key) > UNUSED:
+                            r = ev(f"bhCloseSession({json.dumps(key)})")
+                        else:
                             continue
-                        r = ev(f"bhReapSession({json.dumps(key)}, {json.dumps(ended(key, started, DAY))})")
                         if r and r.get("closed"):
                             print(f"reap: {key}: closed {r['closed']} tab(s), kept {r['kept']}")
                 finally:

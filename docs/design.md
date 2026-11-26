@@ -288,6 +288,21 @@ Claude Code needs both signals so neither alone can stop a live session. For an
 ended session, unmarked tabs close at once and marked ones a day later. A
 mistaken stop costs little: the session's next call starts a new daemon.
 
+A session left open in a terminal never ends by these signals: on 2026-11-26 a
+group last used 25 hours earlier was still open. So the reaper also calls
+`close_session()` for a running session that has made no browser-harness call
+for two hours: its unmarked tabs close, its marked tabs and its name stay, and
+its daemon keeps running, so a later call gets `tab_gone` and opens a new tab
+rather than acting on a blank page. The last call is the modification time of
+the daemon's log, which `agent_helpers.py` touches when it loads; the daemon
+writes there only when it starts or reattaches.
+
+Closing a profile's last tab closes its window and unloads the profile, and its
+next session can only open it again by bringing Chrome to the front
+(docs/profiles.md). The reaper closes grouped tabs only, so before it does it
+makes sure the profile has one tab outside every group, an empty one if need be;
+that tab stays.
+
 ## Restarting the shared Chrome
 
 Every session's tabs live in one Chrome, so restarting it closes work in
